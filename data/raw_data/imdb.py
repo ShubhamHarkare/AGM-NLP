@@ -33,6 +33,7 @@ class GetImdbData:
 
     def getData(self, total_size=15500):
         full_data = load_dataset(self.dataset_name, split='all')
+        full_data = full_data.filter(lambda x: x['label'] in (0, 1))
 
         
         full_data = full_data.shuffle(seed=42).select(range(total_size))
