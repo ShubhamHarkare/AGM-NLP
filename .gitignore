@@ -217,3 +217,11 @@ data/sentiment
 #VS Code
 wandb
 .virtual_documents
+
+# Miss
+greatlakes.sh
+
+# slurm-44294398.out
+slurm*
+
+checkpoints

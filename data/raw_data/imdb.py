@@ -20,7 +20,7 @@ class GetImdbData:
     def __init__(self):
        
         self.dataset_name = os.environ.get('IMDB_DATA', 'stanfordnlp/imdb')
-        self.output_dir = "imdb"
+        self.output_dir = "data/imdb"
 
         self.train_data = None
         self.val_data   = None
