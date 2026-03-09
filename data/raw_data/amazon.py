@@ -26,7 +26,7 @@ class GetAmazonData:
 
     def __init__(self):
         self.dataset_name = os.environ.get('AMAZON_DATA', 'fancyzhx/amazon_polarity')
-        self.output_dir = "amazon"
+        self.output_dir = "data/amazon"
 
         self.train_data = None
         self.val_data   = None

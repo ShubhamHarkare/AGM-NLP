@@ -28,7 +28,7 @@ class GetSentimentData:
         # FIX 1: added fallback default so code doesn't silently crash
         # if SENTIMENT_DATA is missing from the .env file
         self.dataset_name = os.environ.get('SENTIMENT_DATA', 'sentiment140')
-        self.output_dir = "sentiment"
+        self.output_dir = "data/sentiment"
 
         self.train_data = None
         self.val_data   = None

@@ -27,7 +27,7 @@ class GetHotelData:
 
     def __init__(self):
         self.dataset_name = os.environ.get('HOTEL_DATA', 'enelpol/booking_com_reviews')
-        self.output_dir = "hotel"
+        self.output_dir = "data/hotel"
 
         self.train_data = None
         self.val_data = None
