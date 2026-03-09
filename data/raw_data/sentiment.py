@@ -35,37 +35,13 @@ class GetSentimentData:
         self.test_data  = None
         self.ads_data   = None
 
-    def _preprocess(self, dataset):
-        '''
-        FIX 2: added preprocessing method to handle Sentiment140 specific issues:
-            1. Remap labels from {0, 4} to {0, 1}
-            2. Rename 'sentiment' column to 'label' for consistent schema
-            3. Add domain column
-        '''
-        # FIX 3: remap label 4 → 1 so all datasets use binary {0, 1} labels
-        # without this, positive examples have label=4 which breaks training
-        dataset = dataset.map(lambda x: {
-            'label':  0 if x['sentiment'] == 0 else 1,
-            'domain': 'sentiment140'
-        })
-
-        # FIX 4: keep only the columns we need for a clean consistent schema
-        # Sentiment140 has extra columns (date, user, query) we don't need
-        dataset = dataset.remove_columns(
-            [col for col in dataset.column_names
-             if col not in ('text', 'label', 'domain')]
-        )
-
-        return dataset
 
     def getData(self, total_size=15500):
         # FIX 5: Sentiment140 only has a 'train' split on HuggingFace
         # using split='all' would throw an error here
         full_data = load_dataset(self.dataset_name, split='train')
 
-        # FIX 6: preprocess before shuffling so label remapping is applied
-        # to the full dataset before any subset is selected
-        full_data = self._preprocess(full_data)
+        
 
         # Shuffle with fixed seed for reproducibility
         full_data = full_data.shuffle(seed=42).select(range(total_size))
