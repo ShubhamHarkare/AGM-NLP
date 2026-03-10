@@ -17,7 +17,7 @@ class RobertaClassifier(nn.Module):
 
     def forward(self,input_ids,attention_mask,token_type_ids = None):
         outputs = self.roberta(
-            input_ids = input_ids, attention_mask = attention_mask, token_type_ids = token_type_ids
+            input_ids = input_ids, attention_mask = attention_mask
         )
         pooled_output = outputs.pooler_output
         pooled_output = self.dropout(pooled_output)
