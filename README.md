@@ -1,171 +1,234 @@
-# DRIFT 🌊
-### Attribution-Guided Masking for Robust Cross-Domain Sentiment Classification
+# Attribution-Guided Masking for Robust Cross-Domain Sentiment Classification
 
-> SI630 Course Project — University of Michigan
-> Shubham Harkare · Yash Kulkarni · Arvind Suresh Yogesh Babu
+**Shubham Harkare · Yash Kulkarni · Arvind Suresh Yogesh Babu**  
+University of Michigan — SI 630 NLP Project
 
 ---
 
 ## Overview
 
-Transformer-based models like BERT and RoBERTa achieve strong in-domain performance on sentiment classification but degrade systematically when evaluated on out-of-distribution domains. We hypothesize this is driven by over-reliance on domain-specific spurious tokens rather than domain-invariant sentiment markers.
+Transformer models such as BERT and RoBERTa achieve strong in-domain performance on sentiment classification but degrade systematically when evaluated on out-of-distribution domains. We hypothesize that this degradation is driven by over-reliance on domain-specific spurious tokens rather than domain-invariant sentiment markers.
 
-This project proposes a three-stage framework:
-1. **Diagnostic study** — quantify the generalization gap (Δ) and Attribution Drift Score (ADS) across domain-transfer pairs
-2. **Predictive experiment** — validate that ADS correlates with Δ prior to any target-domain evaluation
-3. **Attribution-Guided Masking (AGM)** — a novel training objective combining Integrated Gradients-based spuriousness detection with a counterfactual contrastive loss to enforce domain-invariant representations
+This repository implements a three-stage framework:
 
----
+1. **Diagnostic Study** — Quantifying the generalization gap (Δ) and Attribution Drift Score (ADS) across domain-transfer pairs
+2. **Predictive Experiment** — Validating that ADS correlates with Δ prior to any target-domain evaluation
+3. **Attribution-Guided Masking (AGM)** — A novel training objective combining Integrated Gradients-based spuriousness detection with a counterfactual contrastive loss
 
-## Datasets
-
-| Domain | Dataset | Source | Size (per split) |
-|---|---|---|---|
-| Movies | `stanfordnlp/imdb` | IMDb reviews | 15,500 |
-| Products | `fancyzhx/amazon_polarity` | Amazon reviews | 15,500 |
-| Hotels | `enelpol/booking_com_reviews` | Booking.com reviews | 15,500 |
-| Social Media | `sentiment140` | Twitter | 15,500 |
-
-Each dataset is standardized to a unified `{text, label, domain}` schema with binary labels `{0, 1}` and split as follows:
-
-| Split | Size | Purpose |
-|---|---|---|
-| Train | 10,000 | Fine-tune the model |
-| Validation | 2,000 | Hyperparameter tuning, early stopping |
-| Test | 3,000 | Final F1 evaluation |
-| ADS Pool | 500 | Unlabeled target samples for attribution drift computation |
+Target venue: EMNLP Findings or ACL Findings
 
 ---
 
-## Project Structure
+## Repository Structure
 
 ```
-DRIFT/
-├── raw_data/
-│   ├── amazon.py          # Amazon Polarity loader
-│   ├── imdb.py            # IMDb loader
-│   ├── hotels.py          # Booking.com loader (with preprocessing)
-│   ├── sentiment.py       # Sentiment140 loader (with label remapping)
-│   └── raw_data_loader.py # Master loader — runs all 4 datasets
-├── amazon/                # Saved Amazon splits (train/val/test/ads)
-├── hotel/                 # Saved Hotel splits (train/val/test/ads)
-├── imdb/                  # Saved IMDb splits (train/val/test/ads)
-├── sentiment/             # Saved Sentiment140 splits (train/val/test/ads)
-├── validate_datasets.py   # Validation script — checks row counts + schema
-├── .env.example           # Environment variable template
-├── requirements.txt       # Python dependencies
+.
+├── data/
+│   ├── loader.py               # Shared data loading utilities
+│   ├── validate_data.py        # Dataset validation and sanity checks
+│   └── raw_data/               # Domain-specific download scripts
+│       ├── imdb.py             # IMDb Movie Reviews
+│       ├── amazon.py           # Amazon Product Reviews
+│       ├── tripadvisor.py      # TripAdvisor Hotel Reviews
+│       └── sentiment.py        # Sentiment140 (Twitter)
+│
+├── models/
+│   ├── dataset.py              # Shared SentimentDataset class (all models)
+│   ├── bert/
+│   │   ├── bert_model.py       # BertClassifier — BertModel + linear head
+│   │   └── train.py            # BERT training loop, evaluation, W&B logging
+│   ├── roberta/
+│   │   ├── roberta_model.py    # RobertaClassifier — RobertaModel + linear head
+│   │   └── train.py            # RoBERTa training loop (mirrors BERT exactly)
+│   └── dann/
+│       ├── GradientReversalFunction.py   # Custom autograd function (gradient flip)
+│       ├── GradientReversalLayer.py      # nn.Module wrapper for GRL
+│       ├── DANNModel.py                  # DANN — RoBERTa + sentiment head + domain head
+│       └── train.py                      # DANN training loop with dual loss
+│
+├── checkpoints/                # Saved model weights (per domain, per seed)
+├── requirements.txt
 └── README.md
 ```
 
 ---
 
+## Datasets
+
+All datasets are standardized to `{text, label, domain}` format with binary labels {0, 1}, truncated to 256 tokens, and split into train/val/test.
+
+| Domain | Dataset | Size | Notes |
+|--------|---------|------|-------|
+| Movie | IMDb Movie Reviews | Balanced | Long-form narrative reviews |
+| Product | Amazon Product Reviews | Balanced | Consumer product reviews |
+| Hotel | TripAdvisor Hotel Reviews | Balanced | Replaces Yelp from original proposal |
+| Social | Sentiment140 (Twitter) | Balanced | Short informal text, noisiest domain |
+
+Data is stored in HuggingFace Arrow format (`load_from_disk`) under `data/<domain>/train`, `data/<domain>/val`, `data/<domain>/test`.
+
+---
+
+## Models
+
+### Implemented
+
+| Model | File | Status | Notes |
+|-------|------|--------|-------|
+| BERT | `models/bert/` | ✅ Complete | Baseline, results logged |
+| RoBERTa | `models/roberta/` | ✅ Complete | Stronger baseline, results logged |
+| DANN-RoBERTa | `models/dann/` | 🔄 Training | Leave-one-out, multi-source adversarial |
+| IRM-RoBERTa | `models/irm/` | ⏳ Pending | Invariant Risk Minimization |
+| AGM-RoBERTa | `models/agm/` | ⏳ Pending | Main contribution |
+
+### Planned (Phase 3–4)
+
+- `models/agm/` — Attribution-Guided Masking with counterfactual contrastive loss
+- `analysis/ads.py` — Attribution Drift Score computation using Captum
+
+---
+
+## Experimental Protocol
+
+**Task:** Binary sentiment classification (positive / negative)
+
+**Transfer protocol:** Strict zero-shot — models are fine-tuned on source domain only and evaluated directly on unseen target domains. No target domain samples are used at any point during training.
+
+**Seeds:** All experiments run with seeds [42, 43, 44]. Results reported as mean ± std.
+
+**Hardware:** University HPC cluster (A100/V100 GPU)
+
+**Key metrics:**
+- Macro F1 (primary)
+- Accuracy
+- Generalization Gap: `Δ = |F1_source - F1_target|`
+- Transfer Efficiency: `TE = F1_target / F1_source`
+
+**DANN-specific protocol:** Leave-one-out multi-source training. Each fold trains on 3 domains combined and evaluates zero-shot on the held-out 4th domain. Domain classifier uses `num_domains=3` per fold and is discarded at evaluation time.
+
+---
+
+## Baseline Results
+
+### BERT — Generalization Gap (Δ) Matrix
+
+| Source \ Target | IMDb | Amazon | Hotel | Sentiment |
+|----------------|------|--------|-------|-----------|
+| **IMDb** | — | 0.008 | 0.046 | 0.226 |
+| **Amazon** | 0.054 | — | 0.043 | 0.229 |
+| **Hotel** | 0.194 | 0.092 | — | 0.255 |
+| **Sentiment** | 0.042 | 0.017 | 0.070 | — |
+
+### RoBERTa — Generalization Gap (Δ) Matrix
+
+| Source \ Target | IMDb | Amazon | Hotel | Sentiment |
+|----------------|------|--------|-------|-----------|
+| **IMDb** | — | 0.006 | 0.105 | 0.298 |
+| **Amazon** | 0.047 | — | 0.046 | 0.245 |
+| **Hotel** | 0.235 | 0.104 | — | 0.283 |
+| **Sentiment** | 0.023 | 0.047 | 0.023 | — |
+
+**Key finding:** RoBERTa achieves higher in-domain F1 across all domains but shows larger generalization gaps than BERT on 8 of 12 transfer pairs — particularly on stylistically distant domain pairs. This suggests increased model capacity amplifies spurious domain-specific correlations during fine-tuning, strongly motivating AGM.
+
+---
+
+## Training
+
+### BERT / RoBERTa
+
+```bash
+python models/bert/train.py
+python models/roberta/train.py
+```
+
+Loops over all 4 source domains, trains 3 seeds each, logs to W&B.
+
+### DANN
+
+```bash
+python models/dann/train.py
+```
+
+Leave-one-out protocol — trains 4 folds × 3 seeds = 12 total runs.
+
+---
+
 ## Setup
 
-### 1. Clone the repository
 ```bash
-git clone https://github.com/<your-username>/DRIFT.git
-cd DRIFT
-```
+# Clone the repository
+git clone <repo-url>
+cd <repo>
 
-### 2. Create a virtual environment
-```bash
-python -m venv venv
-source venv/bin/activate   # Linux/Mac
-venv\Scripts\activate      # Windows
-```
-
-### 3. Install dependencies
-```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-### 4. Configure environment variables
-```bash
+# Set up environment variables
 cp .env.example .env
-# Edit .env if needed — defaults are already set for all 4 datasets
-```
+# Add your WANDB_API_KEY to .env
 
-### 5. Download and prepare all datasets
-```bash
-python raw_data/raw_data_loader.py
-```
-
-### 6. Validate the data
-```bash
-python validate_datasets.py
-```
-
-Expected output:
-```
---- Starting Validation ---
-Target splits:  10000 Train | 2000 Val | 3000 Test | 500 ADS
-Target columns: {'text', 'label', 'domain'}
-Target labels:  {0, 1}
-
-✅ amazon: train=10000, val=2000, test=3000, ads=500 | columns=OK | labels=OK
-✅ hotel:  train=10000, val=2000, test=3000, ads=500 | columns=OK | labels=OK
-✅ imdb:   train=10000, val=2000, test=3000, ads=500 | columns=OK | labels=OK
-✅ sentiment: train=10000, val=2000, test=3000, ads=500 | columns=OK | labels=OK
-
-🎉 All datasets validated successfully and match your targets perfectly!
+# Download and preprocess datasets
+python data/raw_data/imdb.py
+python data/raw_data/amazon.py
+python data/raw_data/tripadvisor.py
+python data/raw_data/sentiment.py
 ```
 
 ---
 
-## Methodology
+## Hyperparameters
 
-### Attribution Drift Score (ADS)
-For each domain pair (S, T), mean Integrated Gradients (IG) attribution vectors are computed over source and target samples:
-
-```
-ADS(S, T) = 1 − cos(meanIG_S, meanIG_T)
-```
-
-### Spurious Token Detection
-A token `t` is flagged as spurious if:
-```
-IG_S(t) > τ_high  AND  IG_T(t) < τ_low
-```
-
-### AGM Objective
-```
-L_AGM = L_CE + λ1·L_mask + λ2·L_CCL
-```
-- **L_CE** — standard cross-entropy on source domain
-- **L_mask** — penalizes high attribution on spurious tokens
-- **L_CCL** — counterfactual contrastive loss enforcing invariance between original and masked inputs
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Batch size | 32 | All models |
+| Max length | 256 | Tokens |
+| Learning rate | 2e-5 | AdamW |
+| Warmup ratio | 0.1 | Linear warmup |
+| Epochs | 10 | With early stopping |
+| Early stopping patience | 3 | On val F1 |
+| Gradient clip | 1.0 | Max norm |
+| Seeds | 42, 43, 44 | 3 runs per experiment |
+| DANN λ schedule | Annealed 0→1 | `2/(1+exp(-10p))-1` |
 
 ---
 
-## Baselines
+## Experiment Tracking
 
-| Model | Description |
-|---|---|
-| BERT-base | Standard fine-tuned BERT |
-| RoBERTa-base | Standard fine-tuned RoBERTa |
-| DANN-RoBERTa | Domain-adversarial training |
-| IRM-RoBERTa | Invariant Risk Minimization |
-| **AGM-RoBERTa** | **Ours — full AGM objective** |
+All runs logged to Weights & Biases under project `AGM-NLP`. Each run logs:
+- Per-epoch train loss, val F1, val accuracy
+- Per-transfer-pair test F1, accuracy, Δ, TE
+- Summary statistics (mean ± std) across seeds
 
 ---
 
-## Evaluation Metrics
+## Project Roadmap
 
-- **Macro F1** — primary metric
-- **Generalization Gap** Δ = |F1_source − F1_target|
-- **Transfer Efficiency** TE = F1_target / F1_source
-- **Spuriousness Concentration (SC)** — fraction of attribution mass on spurious tokens
-- **ADS–Δ Correlation** — Pearson and Spearman correlation across domain pairs
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Environment & Data Setup | ✅ Complete |
+| 2 | Baseline Implementation (BERT, RoBERTa, DANN, IRM) | 🔄 In Progress |
+| 3 | Diagnostic Study — ADS computation and correlation with Δ | ⏳ Pending |
+| 4 | AGM Implementation — masking loss + counterfactual contrastive loss | ⏳ Pending |
+| 5 | Ablations & Analysis | ⏳ Pending |
+| 6 | Paper Writing & Submission | ⏳ Pending |
+
+---
+
+## Citation
+
+If you reference this work, please cite:
+
+```
+Harkare, S., Kulkarni, Y., & Suresh Yogesh Babu, A. (2025).
+Attribution-Guided Masking for Robust Cross-Domain Sentiment Classification.
+University of Michigan, SI 630.
+```
 
 ---
 
-## Progress
+## Notes for Teammates
 
-- [x] Phase 1 — Environment & Data Setup
-- [ ] Phase 2 — Baseline Implementation
-- [ ] Phase 3 — Diagnostic Study (ADS)
-- [ ] Phase 4 — AGM Implementation
-- [ ] Phase 5 — Ablations & Analysis
-- [ ] Phase 6 — Paper Writing & Submission
-
----
+- **Do not push checkpoints to GitHub** — they are large and gitignored
+- **Always run 3 seeds** — single-seed results will not be accepted in the paper
+- **Log everything to W&B from run 1** — do not rely on terminal output
+- **Match hyperparameters exactly across models** — reviewers will check for fair comparison
+- **Document any deviation from the protocol** — especially dataset or preprocessing changes
