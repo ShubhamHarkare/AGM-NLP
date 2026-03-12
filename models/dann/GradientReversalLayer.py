@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from dann import GradientReversalFunction
-
+# from dann import GradientReversalFunction
+from GradientReversalFunction import GradientReversalFunction
 
 class GradientReversalLayer(nn.Module):
     def __init__(self,lambda_):

@@ -12,10 +12,11 @@ class SentimentDataset(Dataset):
     This is a DataLoader
     '''
 
-    def __init__(self,data_path,tokenizer,max_length = 256):
+    def __init__(self,data_path,tokenizer,max_length = 256, domain = None):
         self.data = load_from_disk(data_path)
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.domain = domain
 
 
     def __len__(self):
@@ -41,6 +42,9 @@ class SentimentDataset(Dataset):
             'attention_mask': encoding['attention_mask'].squeeze(0),
             'label':          torch.tensor(label, dtype=torch.long),
         }
+
+        if self.domain is not None:
+            sample['domain'] = torch.tensor(self.domain, dtype = torch.long)
 
         if 'token_type_ids' in encoding:
             sample['token_type_ids'] = encoding['token_type_ids'].squeeze(0)
