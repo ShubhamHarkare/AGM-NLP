@@ -40,14 +40,14 @@ DATA_ROOT  = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
 CKPT_DIR   = os.path.join(os.path.dirname(__file__), '..', '..', 'checkpoints')
 BATCH_SIZE = 32
 MAX_LENGTH = 256
-EPOCHS     = 50
+EPOCHS     = 10
 LR         = 2e-5
 WARMUP_RATIO = 0.1
 SEEDS      = [42, 43, 44]
 DEVICE     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 IRM_LAMBDA_WARMUP = 1.0
-IRM_LAMBDA_MAIN = 1e4
-WARMUP_STEPS = 100
+IRM_LAMBDA_MAIN = 1e2
+WARMUP_STEPS = 500
 
 def get_dataloader(target_domain,split,tokenizer,shuffle = False):
     datasets = []
@@ -247,6 +247,7 @@ def train(domain,seed,tokenizer):
             'train_loss':     avg_train_loss,
             'val_f1':         val_f1,
             'val_acc':        val_acc,
+            'lambda': lambda_
         })
 
 
