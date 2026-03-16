@@ -1,0 +1,20 @@
+ADS Results — Phase 3 Diagnostic Study
+==================================================
+
+Transfer Pair         ADS       Δ (RoBERTa)
+--------------------------------------------------
+imdb -> amazon        0.1332    0.0060
+imdb -> hotel         0.3869    0.1050
+imdb -> sentiment     0.4662    0.2980
+amazon -> imdb        0.2248    0.0470
+amazon -> hotel       0.2562    0.0460
+amazon -> sentiment   0.2587    0.2450
+hotel -> imdb         0.3962    0.2350
+hotel -> amazon       0.1235    0.1040
+hotel -> sentiment    0.0814    0.2830
+sentiment -> imdb     0.7345    0.0230
+sentiment -> amazon   0.4563    0.0470
+sentiment -> hotel    0.0325    0.0230
+
+Pearson  r = 0.0066  (p = 0.9839)
+Spearman r = 0.1825  (p = 0.5703)

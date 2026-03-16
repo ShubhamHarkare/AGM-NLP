@@ -113,12 +113,19 @@ def main():
     print("Computing the ADS score for all the 12 transfer pairs")
     ads_scores = {}
 
-
+    mean_ig_vectors = {}
+    for source in DOMAINS:
+        model = load_roberta(source)
+        mean_ig_vectors[source] = {}
+        for target in DOMAINS:
+            dataloader = get_ads_dataloader(target,tokenizer)
+            mean_ig_vectors[source][target] = compute_mean_ig(model,dataloader,DEVICE)
     for source in DOMAINS:
         for target in DOMAINS:
             if source == target: continue
 
-            ads = compute_ads(mean_ig_vectors[source],mean_ig_vectors[target])
+            ads = compute_ads(
+                mean_ig_vectors[source][source], mean_ig_vectors[source][target])
             ads_scores[(source,target)] = ads
             print(f"ADS ({source} → {target}): {ads:.4f}")
 
