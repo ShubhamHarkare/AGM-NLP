@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from models.roberta.roberta_model import RobertaClassifier
 from models.dataset import SentimentDataset
@@ -20,8 +21,8 @@ from models.ads.compute_mean_ig import compute_mean_ig,compute_ads
 # ── Config ────────────────────────────────────────────────────────────────────
 
 DOMAINS    = ['imdb', 'amazon', 'hotel', 'sentiment']
-DATA_ROOT  = os.path.join(os.path.dirname(__file__), '..', 'data')
-CKPT_DIR   = os.path.join(os.path.dirname(__file__), '..', 'checkpoints')
+DATA_ROOT = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
+CKPT_DIR  = os.path.join(os.path.dirname(__file__), '..', '..', 'checkpoints')
 MAX_LENGTH = 256
 BATCH_SIZE = 16   # smaller batch size for IG computation — memory intensive
 DEVICE     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
