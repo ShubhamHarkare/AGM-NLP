@@ -17,7 +17,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from models.roberta.roberta_model import RobertaClassifier
 from models.dataset import SentimentDataset
 # from analysis.ig_computation import compute_mean_ig, compute_ads
-from models.ads.compute_mean_ig import compute_mean_ig,compute_ads
+from models.ads.compute_mean_ig import compute_token_ig, compute_ads_shared_vocab
 # ── Config ────────────────────────────────────────────────────────────────────
 
 DOMAINS    = ['imdb', 'amazon', 'hotel', 'sentiment']
@@ -89,120 +89,99 @@ def load_roberta(domain,seed = SEED):
 def main():
     tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
 
-    #TODO: Compute the mean IG vector for each domain
+    print("\n=== Computing directional token-level ADS ===")
+    ads_scores = {}
+    shared_token_counts = {}
 
-    print('Computing mean IG vectors for all domains')
-    mean_ig_vectors = {}
+    for source in DOMAINS:
+        print(f"\nLoading source model: {source}")
+        model = load_roberta(source)
 
+        # compute token IG on source domain data using source model
+        print(f"  Computing IG on {source} data...")
+        source_loader = get_ads_dataloader(source, tokenizer)
+        token_ig_source = compute_token_ig(model, source_loader, DEVICE)
 
-    for domain in DOMAINS:
-        print(f"\n Processing domain: {domain}")
+        # compute token IG on each target domain using same source model
+        for target in DOMAINS:
+            if source == target:
+                continue
+            print(f"  Computing IG on {target} data (source model: {source})...")
+            target_loader = get_ads_dataloader(target, tokenizer)
+            token_ig_target = compute_token_ig(model, target_loader, DEVICE)
 
+            # compute ADS using shared vocabulary only
+            ads, n_shared = compute_ads_shared_vocab(token_ig_source, token_ig_target)
+            ads_scores[(source, target)] = ads
+            shared_token_counts[(source, target)] = n_shared
+            print(f"  ADS ({source}→{target}): {ads:.4f} | shared tokens: {n_shared}")
 
-        model = load_roberta(domain)
-
-        dataloader = get_ads_dataloader(domain,tokenizer)
-        mean_ig = compute_mean_ig(model,dataloader,DEVICE)
-        mean_ig_vectors[domain] = mean_ig
-
-        print(f"Mean IG vector computed for {domain} — shape: {mean_ig.shape}")
-
-        # free GPU memory before loading next model
         del model
         torch.cuda.empty_cache()
-    print("Computing the ADS score for all the 12 transfer pairs")
-    ads_scores = {}
 
-    mean_ig_vectors = {}
-    for source in DOMAINS:
-        model = load_roberta(source)
-        mean_ig_vectors[source] = {}
-        for target in DOMAINS:
-            dataloader = get_ads_dataloader(target,tokenizer)
-            mean_ig_vectors[source][target] = compute_mean_ig(model,dataloader,DEVICE)
-    for source in DOMAINS:
-        for target in DOMAINS:
-            if source == target: continue
-
-            ads = compute_ads(
-                mean_ig_vectors[source][source], mean_ig_vectors[source][target])
-            ads_scores[(source,target)] = ads
-            print(f"ADS ({source} → {target}): {ads:.4f}")
-
-
-    #TODO: Building parallel lists for correlation 
-    print("\n Correlating ADS with delta")
-    ads_list = []
-    delta_list = []
+    # build parallel lists for correlation
+    print("\n=== Correlating ADS with Δ ===")
+    ads_list    = []
+    delta_list  = []
     pair_labels = []
 
-
-    for pair,ads in ads_scores.items():
+    for pair, ads in ads_scores.items():
         if pair in ROBERTA_DELTA:
             ads_list.append(ads)
             delta_list.append(ROBERTA_DELTA[pair])
-            pair_labels.append(f'{pair[0]} -> {pair[1]}')
+            pair_labels.append(f"{pair[0]}→{pair[1]}")
 
-    ads_array = np.array(ads_list)
+    ads_array   = np.array(ads_list)
     delta_array = np.array(delta_list)
 
-
-    #! Calculating the spearman and pearsons correlation
-    pearson_r,pearson_p = pearsonr(ads_array,delta_array)
-    spearman_r,spearman_p = spearmanr(ads_array,delta_array)
-
+    pearson_r,  pearson_p  = pearsonr(ads_array, delta_array)
+    spearman_r, spearman_p = spearmanr(ads_array, delta_array)
 
     print(f"\nPearson  r = {pearson_r:.4f}  (p = {pearson_p:.4f})")
     print(f"Spearman r = {spearman_r:.4f}  (p = {spearman_p:.4f})")
 
-    # Step 5: save results to file
+    # save results
     results_dir = os.path.join(os.path.dirname(__file__), '..', 'results')
     os.makedirs(results_dir, exist_ok=True)
 
     results_path = os.path.join(results_dir, 'ads_results.txt')
     with open(results_path, 'w') as f:
-        f.write("ADS Results — Phase 3 Diagnostic Study\n")
-        f.write("=" * 50 + "\n\n")
-        f.write("Transfer Pair         ADS       Δ (RoBERTa)\n")
-        f.write("-" * 50 + "\n")
+        f.write("ADS Results — Phase 3 Diagnostic Study (Shared Vocabulary)\n")
+        f.write("=" * 60 + "\n\n")
+        f.write(f"{'Transfer Pair':<20}  {'ADS':>8}  {'Δ (RoBERTa)':>12}  {'Shared Tokens':>14}\n")
+        f.write("-" * 60 + "\n")
         for i, pair in enumerate(pair_labels):
-            f.write(f"{pair:<20}  {ads_list[i]:.4f}    {delta_list[i]:.4f}\n")
+            n_shared = shared_token_counts.get(
+                tuple(pair.replace('→', '->').split('->')), 0
+            )
+            f.write(f"{pair:<20}  {ads_list[i]:>8.4f}  {delta_list[i]:>12.4f}  {n_shared:>14}\n")
         f.write("\n")
         f.write(f"Pearson  r = {pearson_r:.4f}  (p = {pearson_p:.4f})\n")
         f.write(f"Spearman r = {spearman_r:.4f}  (p = {spearman_p:.4f})\n")
 
-    print(f"\nResults saved to {results_path}")
+    print(f"Results saved to {results_path}")
 
-    # Step 6: scatter plot — ADS vs Δ
+    # scatter plot
     plt.figure(figsize=(8, 6))
     plt.scatter(ads_array, delta_array, color='steelblue', s=80, zorder=5)
-
-    # add pair labels to each point
     for i, label in enumerate(pair_labels):
-        plt.annotate(
-            label,
-            (ads_array[i], delta_array[i]),
-            textcoords="offset points",
-            xytext=(5, 5),
-            fontsize=8
-        )
-
-    # add regression line
+        plt.annotate(label, (ads_array[i], delta_array[i]),
+                    textcoords="offset points", xytext=(5, 5), fontsize=8)
     m, b = np.polyfit(ads_array, delta_array, 1)
     x_line = np.linspace(ads_array.min(), ads_array.max(), 100)
     plt.plot(x_line, m * x_line + b, color='red', linewidth=1.5, linestyle='--')
-
     plt.xlabel('Attribution Drift Score (ADS)', fontsize=12)
     plt.ylabel('Generalization Gap (Δ)', fontsize=12)
-    plt.title(f'ADS vs Generalization Gap\nPearson r={pearson_r:.3f}, Spearman r={spearman_r:.3f}',
-              fontsize=13)
+    plt.title(
+        f'ADS vs Generalization Gap (Shared Vocabulary)\n'
+        f'Pearson r={pearson_r:.3f}, Spearman r={spearman_r:.3f}',
+        fontsize=13
+    )
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-
     plot_path = os.path.join(results_dir, 'ads_vs_delta.png')
     plt.savefig(plot_path, dpi=150)
     print(f"Scatter plot saved to {plot_path}")
-    plt.show()
 
 
 if __name__ == '__main__':
