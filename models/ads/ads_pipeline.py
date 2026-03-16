@@ -24,7 +24,7 @@ DOMAINS    = ['imdb', 'amazon', 'hotel', 'sentiment']
 DATA_ROOT  = os.path.join(os.path.dirname(__file__), '..','..', 'data')
 CKPT_DIR   = os.path.join(os.path.dirname(__file__), '..','..', 'checkpoints')
 MAX_LENGTH = 256
-BATCH_SIZE = 16   # smaller batch size for IG computation — memory intensive
+BATCH_SIZE = 4   # smaller batch size for IG computation — memory intensive
 DEVICE     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 SEED       = 42   # use seed 42 checkpoint for ADS computation
 

@@ -50,13 +50,15 @@ def compute_mean_ig(model,dataloader,device):
             baselines=baseline,
             additional_forward_args=(attention_mask,),
             target=target,
-            n_steps=50
+            n_steps=20
         )
 
         attributions = attributions.sum(dim = 2)
 
 
         all_attributions.append(attributions.detach().cpu())
+        del attributions
+        torch.cuda.empty_cache()
 
 
     all_attributions = torch.cat(all_attributions,dim = 0)
