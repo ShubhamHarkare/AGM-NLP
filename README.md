@@ -21,54 +21,7 @@ This repository implements a complete research pipeline:
 
 ## AGM System Architecture
 
-```
-                    ┌─────────────────────────────┐
-                    │        Input Text x          │
-                    └──────────────┬──────────────┘
-                                   │
-                                   ▼
-                    ┌─────────────────────────────┐
-                    │      RoBERTa Encoder         │
-                    └──────┬──────────────┬────────┘
-                           │              │
-               ┌───────────▼──┐   ┌───────▼───────────────┐
-               │  [CLS] vector │   │   last_hidden_state    │
-               └──────┬────────┘   └───────┬───────────────┘
-                      │                    │
-         ┌────────────▼──────┐   ┌─────────▼──────────────┐
-         │ Sentiment          │   │  Gradient × Input       │
-         │ Classifier         │   │  Attribution            │
-         └────────┬───────────┘   └─────────┬──────────────┘
-                  │                          │
-         ┌────────▼───────┐      ┌───────────▼─────────────┐
-         │     L_CE        │      │  Spurious Token          │
-         └────────────────┘      │  Detection (τ=75th pct)  │
-                                 └───────────┬─────────────┘
-                                             │
-                            ┌────────────────┴──────────────┐
-                            │                               │
-                  ┌─────────▼──────────┐       ┌───────────▼──────────┐
-                  │      L_mask         │       │  MLM → x'            │
-                  │  Penalize spurious  │       │  Counterfactual       │
-                  │  token attribution  │       │  Generation           │
-                  └─────────────────────┘       └───────────┬──────────┘
-                                                            │
-                                               ┌────────────▼──────────┐
-                                               │  Filter: label(x)     │
-                                               │       == label(x')    │
-                                               └────────────┬──────────┘
-                                                            │
-                                               ┌────────────▼──────────┐
-                                               │       L_CCL            │
-                                               │  ||f(x) - f(x')||²   │
-                                               └────────────────────────┘
-
-         ┌──────────────────────────────────────────────────────────┐
-         │       L_AGM = L_CE + λ1·L_mask + λ2·L_CCL              │
-         └──────────────────────────────────────────────────────────┘
-```
-
----
+[![](https://mermaid.ink/img/pako:eNpVU9uO2jAQ_ZWRpX1jEQu5EamVIFz2kkjVwkubrJBJJsQicVLbaemy_HudBHYhD1Zmzpkzc0b2kcRlgsQlaV7-jTMqFKxnEY846G8SPvGq1hk8KDi8wf39d5iGr-V0_rqmMOdNqXi7sKct7oWev4I_GKuygb6AWZhTqSBjSYIcpKIKP0vv7mCFXLFCH7AVlMdZB3ht6Tz8Qj2tIlnK8KI-bymL0N9482vBiVKCbWvFSn4jOWv5y3ApaMIaxQN0Lq8KztLLlvoYrqpasLKWsC73evYZKm2v0VW0hm9gmyqDCkXcDJnfuAqo3ENeStllHlvBJz1r0QA_kNOcvSPISwPVNJDXCl5Zc4UipbGqaX7jpFN7DgM_gB1yFHqlEg6bSuhVnS08t5yXY063mGur-FurSDiHHfXUUV8a6sdPlB_gN9v0fJCaLTCBhKUpCuTxjbkF0-NfuVu0vYKwy_s6D_5msgzOozx1cBf4XUB6ZCdYQlwlauyRAkVBm5AcG1pEVIYFRsTVvwkV-4hE_KRrKsp_lWVxKRNlvcuIm2pnOqqrRC9ixuhO0OIzq6fXl7XdJnFNp9Ug7pEciDs0Hvqm6RgDazAcO45tGD3yj7gju2_Z1sgwLVvnH6xTj7y3TQd9Z2xZpjE0nOHItgbjcY9gwvSFD7q31D6p038HkAnm?type=png)](https://mermaid.ai/live/edit#pako:eNpVU9uO2jAQ_ZWRpX1jEQu5EamVIFz2kkjVwkubrJBJJsQicVLbaemy_HudBHYhD1Zmzpkzc0b2kcRlgsQlaV7-jTMqFKxnEY846G8SPvGq1hk8KDi8wf39d5iGr-V0_rqmMOdNqXi7sKct7oWev4I_GKuygb6AWZhTqSBjSYIcpKIKP0vv7mCFXLFCH7AVlMdZB3ht6Tz8Qj2tIlnK8KI-bymL0N9482vBiVKCbWvFSn4jOWv5y3ApaMIaxQN0Lq8KztLLlvoYrqpasLKWsC73evYZKm2v0VW0hm9gmyqDCkXcDJnfuAqo3ENeStllHlvBJz1r0QA_kNOcvSPISwPVNJDXCl5Zc4UipbGqaX7jpFN7DgM_gB1yFHqlEg6bSuhVnS08t5yXY063mGur-FurSDiHHfXUUV8a6sdPlB_gN9v0fJCaLTCBhKUpCuTxjbkF0-NfuVu0vYKwy_s6D_5msgzOozx1cBf4XUB6ZCdYQlwlauyRAkVBm5AcG1pEVIYFRsTVvwkV-4hE_KRrKsp_lWVxKRNlvcuIm2pnOqqrRC9ixuhO0OIzq6fXl7XdJnFNp9Ug7pEciDs0Hvqm6RgDazAcO45tGD3yj7gju2_Z1sgwLVvnH6xTj7y3TQd9Z2xZpjE0nOHItgbjcY9gwvSFD7q31D6p038HkAnm)
 
 ## Repository Structure
 
