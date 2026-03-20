@@ -3,21 +3,25 @@
 **Shubham Harkare · Yash Kulkarni · Arvind Suresh Yogesh Babu**  
 University of Michigan — SI 630 NLP Project
 
+> Target venue: EMNLP 2025 Findings / BlackboxNLP 2025 Workshop
+
 ---
 
 ## Overview
 
-Transformer models such as BERT and RoBERTa achieve strong in-domain performance on sentiment classification but degrade systematically when evaluated on out-of-distribution domains. We hypothesize that this degradation is driven by over-reliance on domain-specific spurious tokens rather than domain-invariant sentiment markers.
+Transformer models such as BERT and RoBERTa achieve strong in-domain performance on sentiment classification but degrade systematically when evaluated on out-of-distribution domains. We show that this degradation is driven by over-reliance on domain-specific spurious tokens rather than domain-invariant sentiment markers.
 
-This repository implements a three-stage framework:
+This repository implements a complete research pipeline:
 
-1. **Diagnostic Study** — Quantifying the generalization gap (Δ) and Attribution Drift Score (ADS) across domain-transfer pairs
-2. **Predictive Experiment** — Validating that ADS correlates with Δ prior to any target-domain evaluation
-3. **Attribution-Guided Masking (AGM)** — A novel training objective combining Integrated Gradients-based spuriousness detection with a counterfactual contrastive loss
-
-Target venue: EMNLP Findings or ACL Findings
+1. **Baseline Study** — BERT, RoBERTa, DANN, and IRM across all domain-transfer pairs
+2. **Diagnostic Study** — Attribution Drift Score (ADS) as a cross-domain diagnostic framework
+3. **Attribution-Guided Masking (AGM)** — A novel training objective combining gradient-based spuriousness detection with counterfactual contrastive learning
 
 ---
+
+## AGM System Architecture
+
+[![](https://mermaid.ink/img/pako:eNpVU9uO2jAQ_ZWRpX1jEQu5EamVIFz2kkjVwkubrJBJJsQicVLbaemy_HudBHYhD1Zmzpkzc0b2kcRlgsQlaV7-jTMqFKxnEY846G8SPvGq1hk8KDi8wf39d5iGr-V0_rqmMOdNqXi7sKct7oWev4I_GKuygb6AWZhTqSBjSYIcpKIKP0vv7mCFXLFCH7AVlMdZB3ht6Tz8Qj2tIlnK8KI-bymL0N9482vBiVKCbWvFSn4jOWv5y3ApaMIaxQN0Lq8KztLLlvoYrqpasLKWsC73evYZKm2v0VW0hm9gmyqDCkXcDJnfuAqo3ENeStllHlvBJz1r0QA_kNOcvSPISwPVNJDXCl5Zc4UipbGqaX7jpFN7DgM_gB1yFHqlEg6bSuhVnS08t5yXY063mGur-FurSDiHHfXUUV8a6sdPlB_gN9v0fJCaLTCBhKUpCuTxjbkF0-NfuVu0vYKwy_s6D_5msgzOozx1cBf4XUB6ZCdYQlwlauyRAkVBm5AcG1pEVIYFRsTVvwkV-4hE_KRrKsp_lWVxKRNlvcuIm2pnOqqrRC9ixuhO0OIzq6fXl7XdJnFNp9Ug7pEciDs0Hvqm6RgDazAcO45tGD3yj7gju2_Z1sgwLVvnH6xTj7y3TQd9Z2xZpjE0nOHItgbjcY9gwvSFD7q31D6p038HkAnm?type=png)](https://mermaid.ai/live/edit#pako:eNpVU9uO2jAQ_ZWRpX1jEQu5EamVIFz2kkjVwkubrJBJJsQicVLbaemy_HudBHYhD1Zmzpkzc0b2kcRlgsQlaV7-jTMqFKxnEY846G8SPvGq1hk8KDi8wf39d5iGr-V0_rqmMOdNqXi7sKct7oWev4I_GKuygb6AWZhTqSBjSYIcpKIKP0vv7mCFXLFCH7AVlMdZB3ht6Tz8Qj2tIlnK8KI-bymL0N9482vBiVKCbWvFSn4jOWv5y3ApaMIaxQN0Lq8KztLLlvoYrqpasLKWsC73evYZKm2v0VW0hm9gmyqDCkXcDJnfuAqo3ENeStllHlvBJz1r0QA_kNOcvSPISwPVNJDXCl5Zc4UipbGqaX7jpFN7DgM_gB1yFHqlEg6bSuhVnS08t5yXY063mGur-FurSDiHHfXUUV8a6sdPlB_gN9v0fJCaLTCBhKUpCuTxjbkF0-NfuVu0vYKwy_s6D_5msgzOozx1cBf4XUB6ZCdYQlwlauyRAkVBm5AcG1pEVIYFRsTVvwkV-4hE_KRrKsp_lWVxKRNlvcuIm2pnOqqrRC9ixuhO0OIzq6fXl7XdJnFNp9Ug7pEciDs0Hvqm6RgDazAcO45tGD3yj7gju2_Z1sgwLVvnH6xTj7y3TQd9Z2xZpjE0nOHItgbjcY9gwvSFD7q31D6p038HkAnm)
 
 ## Repository Structure
 
@@ -25,28 +29,39 @@ Target venue: EMNLP Findings or ACL Findings
 .
 ├── data/
 │   ├── loader.py               # Shared data loading utilities
-│   ├── validate_data.py        # Dataset validation and sanity checks
-│   └── raw_data/               # Domain-specific download scripts
-│       ├── imdb.py             # IMDb Movie Reviews
-│       ├── amazon.py           # Amazon Product Reviews
-│       ├── tripadvisor.py      # TripAdvisor Hotel Reviews
-│       └── sentiment.py        # Sentiment140 (Twitter)
+│   ├── validate_data.py        # Dataset validation
+│   └── raw_data/
+│       ├── imdb.py
+│       ├── amazon.py
+│       ├── tripadvisor.py
+│       └── sentiment.py
 │
 ├── models/
-│   ├── dataset.py              # Shared SentimentDataset class (all models)
+│   ├── dataset.py              # SentimentDataset — shared across all models
 │   ├── bert/
-│   │   ├── bert_model.py       # BertClassifier — BertModel + linear head
-│   │   └── train.py            # BERT training loop, evaluation, W&B logging
+│   │   ├── bert_model.py       # BertClassifier
+│   │   └── train.py
 │   ├── roberta/
-│   │   ├── roberta_model.py    # RobertaClassifier — RobertaModel + linear head
-│   │   └── train.py            # RoBERTa training loop (mirrors BERT exactly)
-│   └── dann/
-│       ├── GradientReversalFunction.py   # Custom autograd function (gradient flip)
-│       ├── GradientReversalLayer.py      # nn.Module wrapper for GRL
-│       ├── DANNModel.py                  # DANN — RoBERTa + sentiment head + domain head
-│       └── train.py                      # DANN training loop with dual loss
+│   │   ├── roberta_model.py    # RobertaClassifier
+│   │   └── train.py
+│   ├── dann/
+│   │   ├── GradientReversalFunction.py
+│   │   ├── GradientReversalLayer.py
+│   │   ├── DANNModel.py
+│   │   └── train.py
+│   ├── irm/
+│   │   ├── penalty.py          # compute_irm_penalty
+│   │   └── train.py
+│   ├── agm/
+│   │   ├── model.py            # AGMModel
+│   │   ├── agm_functions.py    # Helper functions
+│   │   └── train.py            # AGM training loop
+│   └── ads/
+│       ├── compute_mean_ig.py
+│       └── ads_pipeline.py
 │
-├── checkpoints/                # Saved model weights (per domain, per seed)
+├── checkpoints/
+├── results/
 ├── requirements.txt
 └── README.md
 ```
@@ -55,148 +70,115 @@ Target venue: EMNLP Findings or ACL Findings
 
 ## Datasets
 
-All datasets are standardized to `{text, label, domain}` format with binary labels {0, 1}, truncated to 256 tokens, and split into train/val/test.
+| Domain | Dataset | Style | Notes |
+|--------|---------|-------|-------|
+| Movie | IMDb Movie Reviews | Long-form narrative | Cinematic vocabulary |
+| Product | Amazon Product Reviews | Consumer reviews | Product-specific language |
+| Hotel | TripAdvisor Hotel Reviews | Hospitality reviews | Replaces Yelp |
+| Social | Sentiment140 (Twitter) | Short informal text | Noisiest domain |
 
-| Domain | Dataset | Size | Notes |
-|--------|---------|------|-------|
-| Movie | IMDb Movie Reviews | Balanced | Long-form narrative reviews |
-| Product | Amazon Product Reviews | Balanced | Consumer product reviews |
-| Hotel | TripAdvisor Hotel Reviews | Balanced | Replaces Yelp from original proposal |
-| Social | Sentiment140 (Twitter) | Balanced | Short informal text, noisiest domain |
+**Split sizes per domain:**
 
-Data is stored in HuggingFace Arrow format (`load_from_disk`) under `data/<domain>/train`, `data/<domain>/val`, `data/<domain>/test`.
+| Split | Size | Notes |
+|-------|------|-------|
+| Train | 10,000 | Fine-tuning |
+| Val | 2,000 | Early stopping |
+| Test | 3,000 | Final evaluation |
+| ADS | 500 | Carved out first — zero overlap |
 
 ---
 
-## Models
+## Results
 
-### Implemented
+### Generalization Gap (Δ) — All Models
+Lower is better. Δ = |F1_source - F1_target|
 
-| Model | File | Status | Notes |
-|-------|------|--------|-------|
-| BERT | `models/bert/` | ✅ Complete | Baseline, results logged |
-| RoBERTa | `models/roberta/` | ✅ Complete | Stronger baseline, results logged |
-| DANN-RoBERTa | `models/dann/` | 🔄 Training | Leave-one-out, multi-source adversarial |
-| IRM-RoBERTa | `models/irm/` | ⏳ Pending | Invariant Risk Minimization |
-| AGM-RoBERTa | `models/agm/` | ⏳ Pending | Main contribution |
+| Target | BERT | RoBERTa | DANN | IRM | AGM |
+|--------|------|---------|------|-----|-----|
+| **IMDb** | 0.097 | 0.095 | 0.012 | 0.049 | **0.013** ✅ |
+| **Amazon** | 0.096 | 0.099 | 0.021 | 0.055 | **0.029** ✅ |
+| **Hotel** | 0.121 | 0.145 | 0.032 | 0.084 | **0.029** ✅ |
+| **Sentiment** | 0.237 | 0.275 | 0.269 | 0.224 | 🔄 Running |
 
-### Planned (Phase 3–4)
+### AGM Training Curves (IMDb fold — representative)
 
-- `models/agm/` — Attribution-Guided Masking with counterfactual contrastive loss
-- `analysis/ads.py` — Attribution Drift Score computation using Captum
+```
+Epoch   Loss    L_CE    L_mask  L_CCL   Val F1
+1       0.392   0.386   0.042   0.023   0.883
+2       0.299   0.293   0.040   0.015   0.901
+3       0.225   0.220   0.035   0.014   0.905
+8       0.022   0.021   0.005   0.005   0.914
+```
+
+L_mask dropped 87% and L_CCL dropped 79% across training — model genuinely learning to suppress spurious token reliance.
 
 ---
 
 ## Experimental Protocol
 
-**Task:** Binary sentiment classification (positive / negative)
-
-**Transfer protocol:** Strict zero-shot — models are fine-tuned on source domain only and evaluated directly on unseen target domains. No target domain samples are used at any point during training.
-
-**Seeds:** All experiments run with seeds [42, 43, 44]. Results reported as mean ± std.
-
-**Hardware:** University HPC cluster (A100/V100 GPU)
-
-**Key metrics:**
-- Macro F1 (primary)
-- Accuracy
-- Generalization Gap: `Δ = |F1_source - F1_target|`
-- Transfer Efficiency: `TE = F1_target / F1_source`
-
-**DANN-specific protocol:** Leave-one-out multi-source training. Each fold trains on 3 domains combined and evaluates zero-shot on the held-out 4th domain. Domain classifier uses `num_domains=3` per fold and is discarded at evaluation time.
+- **Task:** Binary sentiment classification (positive / negative)
+- **Transfer:** Strict zero-shot — no target domain data during training
+- **DANN/IRM/AGM:** Leave-one-out — train on 3 domains, evaluate on 4th
+- **Seeds:** [42, 43, 44] — results reported as mean±std
+- **Hardware:** University HPC (A100/V100)
+- **Tracking:** Weights & Biases project `AGM-NLP`
 
 ---
 
-## Baseline Results
+## AGM Loss Function
 
-### BERT — Generalization Gap (Δ) Matrix
+```
+L_AGM = L_CE + λ1·L_mask + λ2·L_CCL
 
-| Source \ Target | IMDb | Amazon | Hotel | Sentiment |
-|----------------|------|--------|-------|-----------|
-| **IMDb** | — | 0.008 | 0.046 | 0.226 |
-| **Amazon** | 0.054 | — | 0.043 | 0.229 |
-| **Hotel** | 0.194 | 0.092 | — | 0.255 |
-| **Sentiment** | 0.042 | 0.017 | 0.070 | — |
+L_CE   = CrossEntropyLoss(logits, labels)
+L_mask = mean(attribution[spurious_mask]²)
+L_CCL  = ||f(x) - f(x')||²
+```
 
-### RoBERTa — Generalization Gap (Δ) Matrix
-
-| Source \ Target | IMDb | Amazon | Hotel | Sentiment |
-|----------------|------|--------|-------|-----------|
-| **IMDb** | — | 0.006 | 0.105 | 0.298 |
-| **Amazon** | 0.047 | — | 0.046 | 0.245 |
-| **Hotel** | 0.235 | 0.104 | — | 0.283 |
-| **Sentiment** | 0.023 | 0.047 | 0.023 | — |
-
-**Key finding:** RoBERTa achieves higher in-domain F1 across all domains but shows larger generalization gaps than BERT on 8 of 12 transfer pairs — particularly on stylistically distant domain pairs. This suggests increased model capacity amplifies spurious domain-specific correlations during fine-tuning, strongly motivating AGM.
+Where x' is a counterfactual generated by replacing spurious tokens via RoBERTa MLM, filtered to preserve sentiment polarity.
 
 ---
 
-## Training
+## Hyperparameters
 
-### BERT / RoBERTa
-
-```bash
-python models/bert/train.py
-python models/roberta/train.py
-```
-
-Loops over all 4 source domains, trains 3 seeds each, logs to W&B.
-
-### DANN
-
-```bash
-python models/dann/train.py
-```
-
-Leave-one-out protocol — trains 4 folds × 3 seeds = 12 total runs.
+| Parameter | BERT/RoBERTa | DANN | IRM | AGM |
+|-----------|-------------|------|-----|-----|
+| Batch size | 32 | 32 | 32 | 16 |
+| Max length | 256 | 256 | 256 | 256 |
+| LR | 2e-5 | 2e-5 | 2e-5 | 2e-5 |
+| Epochs | 10 | 10 | 10 | 10 |
+| λ (domain) | — | annealed 0→1 | — | — |
+| λ (IRM) | — | — | warmup=1.0, main=1e2 | — |
+| λ1 (mask) | — | — | — | 0.1 |
+| λ2 (CCL) | — | — | — | 0.1 |
 
 ---
 
 ## Setup
 
 ```bash
-# Clone the repository
 git clone <repo-url>
 cd <repo>
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Set up environment variables
 cp .env.example .env
-# Add your WANDB_API_KEY to .env
+# Add WANDB_API_KEY to .env
 
-# Download and preprocess datasets
 python data/raw_data/imdb.py
 python data/raw_data/amazon.py
 python data/raw_data/tripadvisor.py
 python data/raw_data/sentiment.py
 ```
 
----
+## Training
 
-## Hyperparameters
-
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| Batch size | 32 | All models |
-| Max length | 256 | Tokens |
-| Learning rate | 2e-5 | AdamW |
-| Warmup ratio | 0.1 | Linear warmup |
-| Epochs | 10 | With early stopping |
-| Early stopping patience | 3 | On val F1 |
-| Gradient clip | 1.0 | Max norm |
-| Seeds | 42, 43, 44 | 3 runs per experiment |
-| DANN λ schedule | Annealed 0→1 | `2/(1+exp(-10p))-1` |
-
----
-
-## Experiment Tracking
-
-All runs logged to Weights & Biases under project `AGM-NLP`. Each run logs:
-- Per-epoch train loss, val F1, val accuracy
-- Per-transfer-pair test F1, accuracy, Δ, TE
-- Summary statistics (mean ± std) across seeds
+```bash
+python models/bert/train.py
+python models/roberta/train.py
+python models/dann/train.py
+python models/irm/train.py
+python models/agm/train.py
+python models/ads/ads_pipeline.py
+```
 
 ---
 
@@ -204,31 +186,19 @@ All runs logged to Weights & Biases under project `AGM-NLP`. Each run logs:
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Environment & Data Setup | ✅ Complete |
-| 2 | Baseline Implementation (BERT, RoBERTa, DANN, IRM) | 🔄 In Progress |
-| 3 | Diagnostic Study — ADS computation and correlation with Δ | ⏳ Pending |
-| 4 | AGM Implementation — masking loss + counterfactual contrastive loss | ⏳ Pending |
-| 5 | Ablations & Analysis | ⏳ Pending |
-| 6 | Paper Writing & Submission | ⏳ Pending |
-
----
-
-## Citation
-
-If you reference this work, please cite:
-
-```
-Harkare, S., Kulkarni, Y., & Suresh Yogesh Babu, A. (2025).
-Attribution-Guided Masking for Robust Cross-Domain Sentiment Classification.
-University of Michigan, SI 630.
-```
+| 1 | Data Setup | ✅ Complete |
+| 2 | Baselines (BERT, RoBERTa, DANN, IRM) | ✅ Complete |
+| 3 | ADS Diagnostic Study | ✅ Complete (negative result) |
+| 4 | AGM Implementation | 🔄 In Progress (3/4 folds) |
+| 5 | Ablations | ⏳ Pending |
+| 6 | Paper Writing & Submission | 🔄 In Progress |
 
 ---
 
 ## Notes for Teammates
 
-- **Do not push checkpoints to GitHub** — they are large and gitignored
-- **Always run 3 seeds** — single-seed results will not be accepted in the paper
-- **Log everything to W&B from run 1** — do not rely on terminal output
-- **Match hyperparameters exactly across models** — reviewers will check for fair comparison
-- **Document any deviation from the protocol** — especially dataset or preprocessing changes
+- **Do not push checkpoints** — large files, gitignored
+- **Always run 3 seeds** — single-seed results not accepted
+- **AGM batch size is 16** — not 32, due to double backward memory requirement
+- **IRM lambda must be 1e2** — 1e4 causes model collapse
+- **Log everything to W&B from run 1**
