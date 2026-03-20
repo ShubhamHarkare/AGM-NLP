@@ -31,7 +31,7 @@ load_dotenv()
 DOMAINS      = ['imdb', 'amazon', 'hotel', 'sentiment']
 DATA_ROOT    = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
 CKPT_DIR     = os.path.join(os.path.dirname(__file__), '..', '..', 'checkpoints')
-BATCH_SIZE   = 16    # smaller than other models — AGM is memory intensive
+BATCH_SIZE   = 8    # smaller than other models — AGM is memory intensive
 MAX_LENGTH   = 256
 EPOCHS       = 10
 LR           = 2e-5
@@ -195,6 +195,7 @@ def train(target_domain, seed, tokenizer):
 
     # ── Models ────────────────────────────────────────────────────────────────
     model = AGMModel(num_labels=2).to(DEVICE)
+    model.roberta.gradient_checkpointing_enable()
 
     # MLM model for counterfactual generation — shares backbone with AGMModel
     # sharing weights means only one set of RoBERTa weights in GPU memory
@@ -253,6 +254,8 @@ def train(target_domain, seed, tokenizer):
             # ── 5. Backward on L_CE to get gradients for attribution ──────────
             # retain_graph=True keeps computation graph for L_AGM backward later
             L_CE.backward(retain_graph=True)
+            
+            torch.cuda.empty_cache()
 
             # ── 6. Compute gradient×input attribution ─────────────────────────
             attribution = compute_gradient_input(last_hidden_state)
@@ -292,6 +295,7 @@ def train(target_domain, seed, tokenizer):
             else:
                 L_CCL = torch.tensor(0.0, device=DEVICE)
 
+            torch.cuda.empty_cache()
             # ── 12. Combine losses ────────────────────────────────────────────
             optimizer.zero_grad()
             L_AGM = L_CE + LAMBDA1 * L_mask + LAMBDA2 * L_CCL
