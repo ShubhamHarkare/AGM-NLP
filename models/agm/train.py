@@ -1,5 +1,6 @@
 # DESC: This file is responsible for training the AGM model
 # Attribution-Guided Masking for Robust Cross-Domain Sentiment Classification
+# Memory-optimized for A100 with gradient accumulation
 
 import os
 import sys
@@ -26,7 +27,8 @@ load_dotenv()
 DOMAINS      = ['imdb', 'amazon', 'hotel', 'sentiment']
 DATA_ROOT    = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
 CKPT_DIR     = os.path.join(os.path.dirname(__file__), '..', '..', 'checkpoints')
-BATCH_SIZE   = 8    # smaller than other models — AGM is memory intensive
+BATCH_SIZE   = 4    # micro-batch size (reduced from 8 for memory safety)
+ACCUM_STEPS  = 2    # gradient accumulation → effective batch size = 4 * 2 = 8
 MAX_LENGTH   = 256
 EPOCHS       = 10
 LR           = 2e-5
@@ -161,28 +163,30 @@ def train(target_domain, seed, tokenizer):
         project='AGM-NLP-2',
         name=f'agm_{target_domain}_seed{seed}',
         config={
-            'model':         'agm-roberta',
-            'target_domain': target_domain,
-            'seed':          seed,
-            'batch_size':    BATCH_SIZE,
-            'lr':            LR,
-            'max_length':    MAX_LENGTH,
-            'epochs':        EPOCHS,
-            'lambda1':       LAMBDA1,
-            'lambda2':       LAMBDA2,
+            'model':           'agm-roberta',
+            'target_domain':   target_domain,
+            'seed':            seed,
+            'batch_size':      BATCH_SIZE,
+            'accum_steps':     ACCUM_STEPS,
+            'effective_batch': BATCH_SIZE * ACCUM_STEPS,
+            'lr':              LR,
+            'max_length':      MAX_LENGTH,
+            'epochs':          EPOCHS,
+            'lambda1':         LAMBDA1,
+            'lambda2':         LAMBDA2,
         }
     )
 
     train_loader  = get_dataloader(target_domain, 'train', tokenizer, shuffle=True)
-    
-    # FIX: Use source domains' validation split to prevent Target Domain Leakage
+
+    # Use source domains' validation split to prevent Target Domain Leakage
     val_loader    = get_dataloader(target_domain, 'val', tokenizer)
 
     # ── Models ────────────────────────────────────────────────────────────────
     model = AGMModel(num_labels=2).to(DEVICE)
-    
-    # FIX: Gradient checkpointing MUST be disabled for create_graph=True to work
-    # model.roberta.gradient_checkpointing_enable() 
+
+    # Gradient checkpointing MUST be disabled for create_graph=True to work
+    # model.roberta.gradient_checkpointing_enable()
 
     # MLM model for counterfactual generation
     mlm_model = RobertaForMaskedLM.from_pretrained('roberta-base')
@@ -194,12 +198,13 @@ def train(target_domain, seed, tokenizer):
 
     # ── Optimizer & Scheduler ─────────────────────────────────────────────────
     optimizer    = AdamW(model.parameters(), lr=LR, weight_decay=0.01)
-    total_steps  = len(train_loader) * EPOCHS
-    warmup_steps = int(total_steps * WARMUP_RATIO)
-    scheduler    = get_linear_schedule_with_warmup(
+    # Scheduler counts optimizer steps, not micro-batch steps
+    total_optim_steps = (len(train_loader) // ACCUM_STEPS) * EPOCHS
+    warmup_steps      = int(total_optim_steps * WARMUP_RATIO)
+    scheduler         = get_linear_schedule_with_warmup(
         optimizer,
         num_warmup_steps=warmup_steps,
-        num_training_steps=total_steps
+        num_training_steps=total_optim_steps
     )
     criterion = torch.nn.CrossEntropyLoss()
 
@@ -219,6 +224,8 @@ def train(target_domain, seed, tokenizer):
         total_l_mask    = 0
         total_l_ccl     = 0
 
+        optimizer.zero_grad()  # zero once before accumulation starts
+
         for batch_idx, batch in enumerate(train_loader):
 
             # ── 1. Move to device ─────────────────────────────────────────────
@@ -234,19 +241,15 @@ def train(target_domain, seed, tokenizer):
             # ── 3. Compute L_CE ───────────────────────────────────────────────
             L_CE = criterion(logits, labels)
 
-            # ── 4. Use torch.autograd.grad for Double Backprop ────────────────
-            # FIX: We extract gradients while keeping them attached to the graph
+            # ── 4. Double backprop for attribution ────────────────────────────
             grads = torch.autograd.grad(
-                outputs=L_CE, 
-                inputs=last_hidden_state, 
+                outputs=L_CE,
+                inputs=last_hidden_state,
                 create_graph=True,
                 retain_graph=True
             )[0]
-            
-            torch.cuda.empty_cache()
 
             # ── 5. Compute gradient×input attribution ─────────────────────────
-            # FIX: Passed the attached gradients explicitly
             attribution = compute_gradient_input(last_hidden_state, grads)
 
             # ── 6. Detect spurious tokens ─────────────────────────────────────
@@ -258,48 +261,67 @@ def train(target_domain, seed, tokenizer):
             else:
                 L_mask = torch.tensor(0.0, device=DEVICE)
 
+            # Free grads — no longer needed
+            del grads
+
             # ── 8. Generate counterfactual x' ─────────────────────────────────
-            # FIX: Passed attention_mask to prevent padding token prediction
             counterfactual_ids = generate_counterfactual(
                 input_ids, attention_mask, spurious_mask, mlm_model, mask_token_id
             )
 
-            # ── 9. Filter counterfactual — keep only safe ones ────────────────
+            # ── 9. Filter counterfactual — keep only label-preserving ones ────
             valid = filter_counterfactual(
                 input_ids, counterfactual_ids, model, attention_mask
             )
 
             # ── 10. Compute L_CCL ─────────────────────────────────────────────
+            # FIX: NO .detach() on pooled_output — gradients flow through both
             if valid.any():
                 _, counterfactual_pooled, _ = model(
                     counterfactual_ids[valid],
                     attention_mask[valid]
                 )
                 L_CCL = F.mse_loss(
-                    pooled_output[valid].detach(),
+                    pooled_output[valid],       # NO .detach()
                     counterfactual_pooled
                 )
+                del counterfactual_pooled
             else:
                 L_CCL = torch.tensor(0.0, device=DEVICE)
 
-            torch.cuda.empty_cache()
-            
-            # ── 11. Combine losses ────────────────────────────────────────────
-            optimizer.zero_grad()
-            L_AGM = L_CE + LAMBDA1 * L_mask + LAMBDA2 * L_CCL
+            # Free intermediate tensors
+            del counterfactual_ids, valid, spurious_mask, attribution
+            del logits, last_hidden_state
 
-            # ── 12. Backward on full AGM loss ─────────────────────────────────
+            # ── 11. Combine losses (scaled for gradient accumulation) ─────────
+            L_AGM = (L_CE + LAMBDA1 * L_mask + LAMBDA2 * L_CCL) / ACCUM_STEPS
+
+            # ── 12. Backward — accumulates gradients ──────────────────────────
             L_AGM.backward()
 
-            # ── 13. Clip gradients & update ───────────────────────────────────
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            scheduler.step()
-
-            train_loss   += L_AGM.item()
+            # Track unscaled losses for logging
+            train_loss   += L_AGM.item() * ACCUM_STEPS
             total_l_ce   += L_CE.item()
             total_l_mask += L_mask.item()
             total_l_ccl  += L_CCL.item()
+
+            # Free loss tensors and remaining graph
+            del L_CE, L_mask, L_CCL, L_AGM, pooled_output
+
+            # ── 13. Optimizer step every ACCUM_STEPS micro-batches ────────────
+            if (batch_idx + 1) % ACCUM_STEPS == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+                torch.cuda.empty_cache()
+
+        # Handle leftover batches at end of epoch
+        if (batch_idx + 1) % ACCUM_STEPS != 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
 
         # ── End of epoch ──────────────────────────────────────────────────────
         avg_loss     = train_loss   / len(train_loader)
