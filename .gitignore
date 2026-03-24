@@ -225,3 +225,7 @@ greatlakes.sh
 slurm*
 
 checkpoints
+checkpoints_v2
+checkpoints_prev
+slurm-*
+.virtual_documents

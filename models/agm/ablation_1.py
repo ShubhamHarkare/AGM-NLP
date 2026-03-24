@@ -1,5 +1,5 @@
 # DESC: This file is responsible for training the AGM model
-# Attribution-Guided Masking for Robust Cross-Domain Sentiment Classification
+# Variant 1: No CCL (Attribution-Guided Masking for Robust Cross-Domain Sentiment Classification)
 
 import os
 import sys
@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from torch.utils.data import DataLoader, ConcatDataset
-from transformers import RobertaTokenizer, RobertaForMaskedLM, get_linear_schedule_with_warmup
+from transformers import RobertaTokenizer, get_linear_schedule_with_warmup
 from torch.optim import AdamW
 from dotenv import load_dotenv
 from sklearn.metrics import f1_score, accuracy_score
@@ -17,14 +17,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from models.agm.model import AGMModel
 from models.dataset import SentimentDataset
-# from models.agm.agm_functions import (
-#     compute_gradient_input,
-#     detect_spurious_tokens,
-#     generate_counterfactual,
-#     filter_counterfactual
-# )
-
-from models.agm.model import compute_gradient_input,detect_spurious_tokens,generate_counterfactual,filter_counterfactual
+from models.agm.model import compute_gradient_input, detect_spurious_tokens
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -40,7 +33,7 @@ WARMUP_RATIO = 0.1
 SEEDS        = [42, 43, 44]
 DEVICE       = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 LAMBDA1      = 0.1   # weight for L_mask
-LAMBDA2      = 0.1   # weight for L_CCL
+LAMBDA2      = 0.1   # weight for L_CCL (unused in this script but kept for config)
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -118,11 +111,6 @@ def evaluate_cross_domain(model, target_domain, tokenizer, seed):
     all_labels = []
     train_test_loaders = get_dataloader(target_domain, 'test', tokenizer)
 
-    with torch.no_grad():
-        for batch in train_test_loaders.dataset.__iter__() if hasattr(
-                train_test_loaders.dataset, '__iter__') else []:
-            pass
-
     # cleaner approach — iterate dataloader directly
     with torch.no_grad():
         for batch in DataLoader(
@@ -176,7 +164,7 @@ def train(target_domain, seed, tokenizer):
     np.random.seed(seed)
 
     run = wandb.init(
-        project='AGM-NLP',
+        project='AGM-NLP-2', # FIX: Updated Project Name
         name=f'agm_no_ccl_{target_domain}_seed{seed}',
         config={
             'model':         'agm-roberta',
@@ -192,20 +180,14 @@ def train(target_domain, seed, tokenizer):
     )
 
     train_loader  = get_dataloader(target_domain, 'train', tokenizer, shuffle=True)
-    val_loader    = get_target_dataloader(target_domain, 'val', tokenizer)
+    # FIX: Use source domains' validation split to prevent Target Domain Leakage
+    val_loader    = get_dataloader(target_domain, 'val', tokenizer) 
 
     # ── Models ────────────────────────────────────────────────────────────────
     model = AGMModel(num_labels=2).to(DEVICE)
-    model.roberta.gradient_checkpointing_enable()
-
-    # MLM model for counterfactual generation — shares backbone with AGMModel
-    # sharing weights means only one set of RoBERTa weights in GPU memory
-    # mlm_model = RobertaForMaskedLM.from_pretrained('roberta-base')
-    # mlm_model.roberta = model.roberta   # share backbone weights
-    # mlm_model = mlm_model.to(DEVICE)
-    # mlm_model.eval()  # MLM model is never trained — only used for generation
-
-    # mask_token_id = tokenizer.mask_token_id
+    
+    # FIX: Gradient checkpointing MUST be disabled for create_graph=True to work
+    # model.roberta.gradient_checkpointing_enable()
 
     # ── Optimizer & Scheduler ─────────────────────────────────────────────────
     optimizer    = AdamW(model.parameters(), lr=LR, weight_decay=0.01)
@@ -232,7 +214,6 @@ def train(target_domain, seed, tokenizer):
         train_loss      = 0
         total_l_ce      = 0
         total_l_mask    = 0
-        # total_l_ccl     = 0
 
         for batch_idx, batch in enumerate(train_loader):
 
@@ -246,65 +227,46 @@ def train(target_domain, seed, tokenizer):
                 input_ids, attention_mask
             )
 
-            # ── 3. Retain grad for attribution computation ────────────────────
-            last_hidden_state.retain_grad()
-
-            # ── 4. Compute L_CE ───────────────────────────────────────────────
+            # ── 3. Compute L_CE ───────────────────────────────────────────────
             L_CE = criterion(logits, labels)
 
-            # ── 5. Backward on L_CE to get gradients for attribution ──────────
-            # retain_graph=True keeps computation graph for L_AGM backward later
-            L_CE.backward(retain_graph=True)
+            # ── 4. Use torch.autograd.grad for Double Backprop ────────────────
+            # FIX: Extract gradients while keeping them attached to the graph
+            grads = torch.autograd.grad(
+                outputs=L_CE, 
+                inputs=last_hidden_state, 
+                create_graph=True,
+                retain_graph=True
+            )[0]
             
             torch.cuda.empty_cache()
 
-            # ── 6. Compute gradient×input attribution ─────────────────────────
-            attribution = compute_gradient_input(last_hidden_state)
+            # ── 5. Compute gradient×input attribution ─────────────────────────
+            # FIX: Pass the attached gradients explicitly
+            attribution = compute_gradient_input(last_hidden_state, grads)
             # shape: [batch, seq_len]
 
-            # ── 7. Detect spurious tokens ─────────────────────────────────────
+            # ── 6. Detect spurious tokens ─────────────────────────────────────
             spurious_mask = detect_spurious_tokens(attribution, tau_high=0.75)
             # shape: [batch, seq_len] — True where token is spurious
 
-            # ── 8. Compute L_mask ─────────────────────────────────────────────
+            # ── 7. Compute L_mask ─────────────────────────────────────────────
             # penalize squared attribution on spurious tokens
             if spurious_mask.any():
                 L_mask = (attribution[spurious_mask] ** 2).mean()
             else:
                 L_mask = torch.tensor(0.0, device=DEVICE)
 
-            # ── 9. Generate counterfactual x' ─────────────────────────────────
-            # counterfactual_ids = generate_counterfactual(
-            #     input_ids, spurious_mask, mlm_model, mask_token_id
-            # )
-
-            # # ── 10. Filter counterfactual — keep only safe ones ───────────────
-            # valid = filter_counterfactual(
-            #     input_ids, counterfactual_ids, model, attention_mask
-            # )
-
-            # ── 11. Compute L_CCL ─────────────────────────────────────────────
-            # if valid.any():
-            #     _, counterfactual_pooled, _ = model(
-            #         counterfactual_ids[valid],
-            #         attention_mask[valid]
-            #     )
-            #     L_CCL = F.mse_loss(
-            #         pooled_output[valid].detach(),
-            #         counterfactual_pooled
-            #     )
-            # else:
-            #     L_CCL = torch.tensor(0.0, device=DEVICE)
-
             torch.cuda.empty_cache()
-            # ── 12. Combine losses ────────────────────────────────────────────
+            
+            # ── 8. Combine losses ─────────────────────────────────────────────
             optimizer.zero_grad()
             L_AGM = L_CE + LAMBDA1 * L_mask
 
-            # ── 13. Backward on full AGM loss ─────────────────────────────────
+            # ── 9. Backward on full AGM loss ──────────────────────────────────
             L_AGM.backward()
 
-            # ── 14. Clip gradients & update ───────────────────────────────────
+            # ── 10. Clip gradients & update ───────────────────────────────────
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
@@ -312,13 +274,11 @@ def train(target_domain, seed, tokenizer):
             train_loss   += L_AGM.item()
             total_l_ce   += L_CE.item()
             total_l_mask += L_mask.item()
-            # total_l_ccl  += L_CCL.item()
 
         # ── End of epoch ──────────────────────────────────────────────────────
         avg_loss     = train_loss   / len(train_loader)
         avg_l_ce     = total_l_ce   / len(train_loader)
         avg_l_mask   = total_l_mask / len(train_loader)
-        # avg_l_ccl    = total_l_ccl  / len(train_loader)
 
         val_f1, val_acc = evaluate(model, val_loader)
 
@@ -326,7 +286,6 @@ def train(target_domain, seed, tokenizer):
               f"Loss: {avg_loss:.4f} | "
               f"L_CE: {avg_l_ce:.4f} | "
               f"L_mask: {avg_l_mask:.4f} | "
-            #   f"L_CCL: {avg_l_ccl:.4f} | "
               f"Val F1: {val_f1:.4f}")
 
         wandb.log({
@@ -334,7 +293,6 @@ def train(target_domain, seed, tokenizer):
             'train_loss': avg_loss,
             'l_ce':       avg_l_ce,
             'l_mask':     avg_l_mask,
-            # 'l_ccl':      avg_l_ccl,
             'val_f1':     val_f1,
             'val_acc':    val_acc,
         })
@@ -380,7 +338,7 @@ def main():
             )
 
             wandb.init(
-                project='AGM-NLP',
+                project='AGM-NLP-2', # FIX: Updated Project Name
                 name=f'agm_no_ccl_{target}_seed{seed}_eval',
                 config={
                     'model':         'agm-roberta',
@@ -395,7 +353,7 @@ def main():
 
         # Summary across seeds
         wandb.init(
-            project='AGM-NLP',
+            project='AGM-NLP-2', # FIX: Updated Project Name
             name=f'agm_no_ccl_{target}_summary',
             config={
                 'model':         'agm-roberta',

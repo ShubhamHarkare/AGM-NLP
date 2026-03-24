@@ -17,13 +17,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from models.agm.model import AGMModel
 from models.dataset import SentimentDataset
-# from models.agm.agm_functions import (
-#     compute_gradient_input,
-#     detect_spurious_tokens,
-#     generate_counterfactual,
-#     filter_counterfactual
-# )
-from models.agm.model import compute_gradient_input,detect_spurious_tokens,generate_counterfactual,filter_counterfactual
+from models.agm.model import compute_gradient_input, detect_spurious_tokens, generate_counterfactual, filter_counterfactual
+
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -82,11 +77,6 @@ def get_target_dataloader(domain, split, tokenizer, shuffle=False):
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
 def evaluate(model, dataloader):
-    '''
-    Evaluates AGMModel on a dataloader.
-    AGMModel returns (logits, pooled_output, last_hidden_state).
-    Only logits are needed for evaluation.
-    '''
     model.eval()
     all_preds  = []
     all_labels = []
@@ -97,7 +87,6 @@ def evaluate(model, dataloader):
             attention_mask = batch['attention_mask'].to(DEVICE)
             labels         = batch['label'].to(DEVICE)
 
-            # AGMModel returns 3 values — only need logits for evaluation
             logits, _, _ = model(input_ids, attention_mask)
             preds = torch.argmax(logits, dim=1)
 
@@ -117,12 +106,6 @@ def evaluate_cross_domain(model, target_domain, tokenizer, seed):
     all_labels = []
     train_test_loaders = get_dataloader(target_domain, 'test', tokenizer)
 
-    with torch.no_grad():
-        for batch in train_test_loaders.dataset.__iter__() if hasattr(
-                train_test_loaders.dataset, '__iter__') else []:
-            pass
-
-    # cleaner approach — iterate dataloader directly
     with torch.no_grad():
         for batch in DataLoader(
             train_test_loaders.dataset,
@@ -175,7 +158,7 @@ def train(target_domain, seed, tokenizer):
     np.random.seed(seed)
 
     run = wandb.init(
-        project='AGM-NLP',
+        project='AGM-NLP-2',
         name=f'agm_{target_domain}_seed{seed}',
         config={
             'model':         'agm-roberta',
@@ -191,18 +174,21 @@ def train(target_domain, seed, tokenizer):
     )
 
     train_loader  = get_dataloader(target_domain, 'train', tokenizer, shuffle=True)
-    val_loader    = get_target_dataloader(target_domain, 'val', tokenizer)
+    
+    # FIX: Use source domains' validation split to prevent Target Domain Leakage
+    val_loader    = get_dataloader(target_domain, 'val', tokenizer)
 
     # ── Models ────────────────────────────────────────────────────────────────
     model = AGMModel(num_labels=2).to(DEVICE)
-    model.roberta.gradient_checkpointing_enable()
+    
+    # FIX: Gradient checkpointing MUST be disabled for create_graph=True to work
+    # model.roberta.gradient_checkpointing_enable() 
 
-    # MLM model for counterfactual generation — shares backbone with AGMModel
-    # sharing weights means only one set of RoBERTa weights in GPU memory
+    # MLM model for counterfactual generation
     mlm_model = RobertaForMaskedLM.from_pretrained('roberta-base')
     mlm_model.roberta = model.roberta   # share backbone weights
     mlm_model = mlm_model.to(DEVICE)
-    mlm_model.eval()  # MLM model is never trained — only used for generation
+    mlm_model.eval()
 
     mask_token_id = tokenizer.mask_token_id
 
@@ -245,44 +231,45 @@ def train(target_domain, seed, tokenizer):
                 input_ids, attention_mask
             )
 
-            # ── 3. Retain grad for attribution computation ────────────────────
-            last_hidden_state.retain_grad()
-
-            # ── 4. Compute L_CE ───────────────────────────────────────────────
+            # ── 3. Compute L_CE ───────────────────────────────────────────────
             L_CE = criterion(logits, labels)
 
-            # ── 5. Backward on L_CE to get gradients for attribution ──────────
-            # retain_graph=True keeps computation graph for L_AGM backward later
-            L_CE.backward(retain_graph=True)
+            # ── 4. Use torch.autograd.grad for Double Backprop ────────────────
+            # FIX: We extract gradients while keeping them attached to the graph
+            grads = torch.autograd.grad(
+                outputs=L_CE, 
+                inputs=last_hidden_state, 
+                create_graph=True,
+                retain_graph=True
+            )[0]
             
             torch.cuda.empty_cache()
 
-            # ── 6. Compute gradient×input attribution ─────────────────────────
-            attribution = compute_gradient_input(last_hidden_state)
-            # shape: [batch, seq_len]
+            # ── 5. Compute gradient×input attribution ─────────────────────────
+            # FIX: Passed the attached gradients explicitly
+            attribution = compute_gradient_input(last_hidden_state, grads)
 
-            # ── 7. Detect spurious tokens ─────────────────────────────────────
+            # ── 6. Detect spurious tokens ─────────────────────────────────────
             spurious_mask = detect_spurious_tokens(attribution, tau_high=0.75)
-            # shape: [batch, seq_len] — True where token is spurious
 
-            # ── 8. Compute L_mask ─────────────────────────────────────────────
-            # penalize squared attribution on spurious tokens
+            # ── 7. Compute L_mask ─────────────────────────────────────────────
             if spurious_mask.any():
                 L_mask = (attribution[spurious_mask] ** 2).mean()
             else:
                 L_mask = torch.tensor(0.0, device=DEVICE)
 
-            # ── 9. Generate counterfactual x' ─────────────────────────────────
+            # ── 8. Generate counterfactual x' ─────────────────────────────────
+            # FIX: Passed attention_mask to prevent padding token prediction
             counterfactual_ids = generate_counterfactual(
-                input_ids, spurious_mask, mlm_model, mask_token_id
+                input_ids, attention_mask, spurious_mask, mlm_model, mask_token_id
             )
 
-            # ── 10. Filter counterfactual — keep only safe ones ───────────────
+            # ── 9. Filter counterfactual — keep only safe ones ────────────────
             valid = filter_counterfactual(
                 input_ids, counterfactual_ids, model, attention_mask
             )
 
-            # ── 11. Compute L_CCL ─────────────────────────────────────────────
+            # ── 10. Compute L_CCL ─────────────────────────────────────────────
             if valid.any():
                 _, counterfactual_pooled, _ = model(
                     counterfactual_ids[valid],
@@ -296,14 +283,15 @@ def train(target_domain, seed, tokenizer):
                 L_CCL = torch.tensor(0.0, device=DEVICE)
 
             torch.cuda.empty_cache()
-            # ── 12. Combine losses ────────────────────────────────────────────
+            
+            # ── 11. Combine losses ────────────────────────────────────────────
             optimizer.zero_grad()
             L_AGM = L_CE + LAMBDA1 * L_mask + LAMBDA2 * L_CCL
 
-            # ── 13. Backward on full AGM loss ─────────────────────────────────
+            # ── 12. Backward on full AGM loss ─────────────────────────────────
             L_AGM.backward()
 
-            # ── 14. Clip gradients & update ───────────────────────────────────
+            # ── 13. Clip gradients & update ───────────────────────────────────
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
@@ -379,7 +367,7 @@ def main():
             )
 
             wandb.init(
-                project='AGM-NLP',
+                project='AGM-NLP-2',
                 name=f'agm_{target}_seed{seed}_eval',
                 config={
                     'model':         'agm-roberta',
@@ -394,7 +382,7 @@ def main():
 
         # Summary across seeds
         wandb.init(
-            project='AGM-NLP',
+            project='AGM-NLP-2',
             name=f'agm_{target}_summary',
             config={
                 'model':         'agm-roberta',
