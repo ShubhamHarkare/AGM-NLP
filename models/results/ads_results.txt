@@ -1,0 +1,20 @@
+ADS Results — Phase 3 Diagnostic Study (Shared Vocabulary)
+============================================================
+
+Transfer Pair              ADS   Δ (RoBERTa)   Shared Tokens
+------------------------------------------------------------
+imdb→amazon             0.8193        0.0060            4857
+imdb→hotel              0.7184        0.1050            1968
+imdb→sentiment          0.7828        0.2980            2076
+amazon→imdb             0.9586        0.0470            4857
+amazon→hotel            0.9385        0.0460            1741
+amazon→sentiment        0.9097        0.2450            1771
+hotel→imdb              0.8976        0.2350            1968
+hotel→amazon            0.8905        0.1040            1741
+hotel→sentiment         0.8963        0.2830             941
+sentiment→imdb          0.9041        0.0230            2076
+sentiment→amazon        0.8077        0.0470            1771
+sentiment→hotel         0.7767        0.0230             941
+
+Pearson  r = 0.0401  (p = 0.9016)
+Spearman r = -0.0526  (p = 0.8710)
