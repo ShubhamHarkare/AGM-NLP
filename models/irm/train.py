@@ -164,7 +164,7 @@ def train(domain,seed,tokenizer):
 
 
     run = wandb.init(
-        project='AGM-NLP',
+        project='AGM-NLP-Research',
         name = f'IRM_{domain}_seed{seed}',
         config={
             'model': 'irm-roberta',
@@ -303,7 +303,7 @@ def main():
             )
             #DESC: The below code is to log the results onto weights and biases 
             wandb.init(
-                project = 'AGM-NLP',
+                project = 'AGM-NLP-Research',
                 name=f'irm_{target}_seed{seed}_eval',
                 config= {
                     'model': 'irm_roberta',
@@ -320,7 +320,7 @@ def main():
 
             #DESC: This is the logging for the summary after we have completed everything
         wandb.init(
-            project='AGM-NLP',
+            project='AGM-NLP-Research',
             name= f'irm_{target}_summary',
             config  = {
             'model':         'irm_roberta',

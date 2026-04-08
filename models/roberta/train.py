@@ -82,7 +82,7 @@ def train(source_domain,seed,tokenizer):
     np.random.seed(seed)
 
     run = wandb.init(
-        project = 'AGM-NLP',
+        project = 'AGM-NLP-Research',
         name = f'roberta_{source_domain}_seed{seed}',
         config = {
             'model': 'roberta-base',
@@ -266,7 +266,7 @@ def main():
             )
             #DESC: The below code is to log the results onto weights and biases 
             wandb.init(
-                project = 'AGM-NLP',
+                project = 'AGM-NLP-Research',
                 name=f'roberta_{source_domain}_seed{seed}_eval',
                 config= {
                     'model': 'roberta-base',
@@ -282,7 +282,7 @@ def main():
 
             
         wandb.init(
-            project='AGM-NLP',
+            project='AGM-NLP-Research',
             name= f'roberta_{source_domain}_summary',
             config  = {
             'model':         'roberta-base',

@@ -142,7 +142,7 @@ def train(test_domain,seed,tokenizer):
     np.random.seed(seed=seed)
     #! Make sure that in wandb the domain is the domain on which the data is trained on
     run = wandb.init(
-        project = 'AGM-NLP',
+        project = 'AGM-NLP-Research',
         name = f'dann_{test_domain}_seed{seed}',
         config = {
             'model': 'dann_roberta',
@@ -312,7 +312,7 @@ def main():
             )
             #DESC: The below code is to log the results onto weights and biases 
             wandb.init(
-                project = 'AGM-NLP',
+                project = 'AGM-NLP-Research',
                 name=f'dann_{target}_seed{seed}_eval',
                 config= {
                     'model': 'dann_roberta',
@@ -329,7 +329,7 @@ def main():
 
             #DESC: This is the logging for the summary after we have completed everything
         wandb.init(
-            project='AGM-NLP',
+            project='AGM-NLP-Research',
             name= f'dann_{target}_summary',
             config  = {
             'model':         'dann_roberta',
