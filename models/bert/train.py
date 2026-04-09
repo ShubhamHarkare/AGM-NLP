@@ -13,19 +13,11 @@ from models.dataset import SentimentDataset
 from models.bert.bert_model import BertClassifier
 import numpy as np
 
-# from trconfig import DOMAINS, DATA_ROOT, BATCH_SIZE, MAX_LENGTH, DEVICE
 load_dotenv()
-
-
-
-
-import torch
-import os
 
 
 DOMAINS    = ['imdb', 'amazon', 'hotel', 'sentiment']
 DATA_ROOT  = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
-CKPT_DIR   = os.path.join(os.path.dirname(__file__), '..', '..', 'checkpoints')
 BATCH_SIZE = 32
 MAX_LENGTH = 256
 EPOCHS     = 50
@@ -43,7 +35,7 @@ def get_dataloader(domain, split, tokenizer, shuffle = False):
         batch_size=BATCH_SIZE,
         shuffle = shuffle,
         num_workers=4,
-        pin_memory=True # Helps to speed up the CPU->GPU transfer
+        pin_memory=True
     )
 
 def evaluate(model,dataloader):
@@ -74,7 +66,8 @@ def evaluate(model,dataloader):
 
 
 
-def train(source_domain,seed,tokenizer):
+def train(source_domain, seed, tokenizer):
+    """Train BERT on source domain. Returns the trained model directly (no checkpoint saved)."""
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -91,15 +84,9 @@ def train(source_domain,seed,tokenizer):
             'epochs': EPOCHS
         }
     )
-    # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     train_loader = get_dataloader(source_domain,'train',tokenizer, shuffle = True)
-    for batch in train_loader:
-        unique_labels = batch['label'].unique()
-        print(f"Unique labels in batch: {unique_labels}")
-        break
     val_dataloader = get_dataloader(source_domain,'val',tokenizer,shuffle = False)
-
 
     model = BertClassifier(num_labels=2).to(DEVICE)
 
@@ -110,15 +97,11 @@ def train(source_domain,seed,tokenizer):
     scheduler = get_linear_schedule_with_warmup(optimizer,num_warmup_steps=warmup_steps,num_training_steps=total_steps)
     criterion = torch.nn.CrossEntropyLoss()
 
-
-    run_ckpt_dir = os.path.join(CKPT_DIR, f'bert_{source_domain}_seed{seed}')
-    os.makedirs(run_ckpt_dir, exist_ok=True)
-
-    # early stopping setup
+    # Early stopping: keep best model weights in memory instead of on disk
     best_val_f1    = 0.0
+    best_state     = None
     patience       = 3
     patience_count = 0
-
 
     for epoch in range(EPOCHS):
         model.train()
@@ -138,15 +121,14 @@ def train(source_domain,seed,tokenizer):
             loss   = criterion(logits, labels)
             loss.backward()
 
-            # gradient clipping — prevents exploding gradients with BERT
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             optimizer.step()
             scheduler.step()
             train_loss += loss.item()
-        avg_train_loss = train_loss / len(train_loader)
-        val_f1, val_acc = evaluate(model,val_dataloader)
 
+        avg_train_loss = train_loss / len(train_loader)
+        val_f1, val_acc = evaluate(model, val_dataloader)
 
         print(f"Epoch {epoch+1}/{EPOCHS} | "
               f"Loss: {avg_train_loss:.4f} | "
@@ -160,35 +142,30 @@ def train(source_domain,seed,tokenizer):
             'val_acc':        val_acc,
         })
 
-
-        # This code below is for early stopping
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
-            patience_count  = 0
-            torch.save(
-                model.state_dict(),
-                os.path.join(run_ckpt_dir,'best_model.pt')
-            )
-            print(f'New best model saved at: val_f1 of {best_val_f1}')
+            patience_count = 0
+            # Save best weights in memory — no disk I/O
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         else:
             patience_count += 1
-            print(f"No improvement {patience_count / patience}")
+            print(f"No improvement {patience_count}/{patience}")
 
             if patience_count >= patience:
-                print(f'Early stopping triggered at epochs : {epoch + 1}')
+                print(f'Early stopping triggered at epoch: {epoch + 1}')
                 break
-    
-
 
     wandb.finish()
-    # model.load_state_dict(
-    #     torch.load(os.path.join(run_ckpt_dir,'best_model.pt'))
-    # )
-    return os.path.join(run_ckpt_dir, 'best_model.pt')
+
+    # Restore best weights before returning
+    if best_state is not None:
+        model.load_state_dict(best_state)
+        model.to(DEVICE)
+
+    return model
 
 
 def evaluate_cross_domain(model, source_domain, tokenizer, seed):
-    # seed parameter added so wandb logs are tagged per seed
     model.eval()
 
     results = {}
@@ -204,18 +181,15 @@ def evaluate_cross_domain(model, source_domain, tokenizer, seed):
         print(f"  {source_domain} → {target_domain}: "
               f"F1={test_f1:.4f}, Acc={test_acc:.4f}")
 
-        # log per-domain test results to wandb
         wandb.log({
             f'test/f1_{source_domain}_to_{target_domain}':  test_f1,
             f'test/acc_{source_domain}_to_{target_domain}': test_acc,
             'seed': seed
         })
 
-        # store source domain F1 for delta computation
         if target_domain == source_domain:
             source_f1 = test_f1
 
-    # compute and log generalization gap (delta) for each transfer pair
     if source_f1 is None:
         raise ValueError(f"source_domain '{source_domain}' not found in DOMAINS")
 
@@ -226,8 +200,6 @@ def evaluate_cross_domain(model, source_domain, tokenizer, seed):
             results[target_domain]['delta'] = delta
             results[target_domain]['te']    = te
 
-            # log delta and transfer efficiency — these are your paper's
-            # core diagnostic metrics so they need to be logged clearly
             wandb.log({
                 f'delta/{source_domain}_to_{target_domain}': delta,
                 f'te/{source_domain}_to_{target_domain}':    te,
@@ -241,9 +213,7 @@ def evaluate_cross_domain(model, source_domain, tokenizer, seed):
 
 
 def main():
-    os.makedirs(CKPT_DIR,exist_ok=True)
     wandb.login(key=os.environ.get('WANDB_API_KEY'))
-
 
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
@@ -251,17 +221,13 @@ def main():
         print(f'Training on source domain: {source_domain}')
 
         seed_results = []
-        #DESC: Making sure that we are not lucky because of the seed, hence we are repeating our experiment so that we can have a error margin
+
         for seed in SEEDS:
             print(f'SEED: {seed}')
 
-            ckpt_path = train(source_domain=source_domain,seed=seed, tokenizer = tokenizer)
-            model = BertClassifier(num_labels=2).to(DEVICE)
+            # train() now returns the model directly — no checkpoint on disk
+            model = train(source_domain=source_domain, seed=seed, tokenizer=tokenizer)
 
-            model.load_state_dict(
-                torch.load(ckpt_path,map_location=DEVICE)
-            )
-            #DESC: The below code is to log the results onto weights and biases 
             wandb.init(
                 project = 'AGM-NLP-Research',
                 name=f'bert_{source_domain}_seed{seed}_eval',
@@ -272,23 +238,26 @@ def main():
                 }
             )
 
-            results = evaluate_cross_domain(model,source_domain,tokenizer,seed)
+            results = evaluate_cross_domain(model, source_domain, tokenizer, seed)
             seed_results.append(results)
             wandb.finish()
 
+            # Explicitly free GPU memory before next seed
+            del model
+            torch.cuda.empty_cache()
 
-            #DESC: This is the logging for the summary after we have completed everything
+        # Summary logging
         wandb.init(
             project='AGM-NLP-Research',
             name= f'bert_{source_domain}_summary',
             config  = {
-            'model':         'bert-base-uncased',
-            'source_domain': source_domain,
-            'seeds':         SEEDS,
-            'batch_size':    BATCH_SIZE,
-            'lr':            LR,
-            'max_length':    MAX_LENGTH,
-            'epochs':        EPOCHS,
+                'model':         'bert-base-uncased',
+                'source_domain': source_domain,
+                'seeds':         SEEDS,
+                'batch_size':    BATCH_SIZE,
+                'lr':            LR,
+                'max_length':    MAX_LENGTH,
+                'epochs':        EPOCHS,
             }
         )
 
@@ -314,7 +283,6 @@ def main():
                 f'summary/std_acc_{source_domain}_to_{target_domain}':  std_acc,
             })
 
-            # log delta and TE summary for cross domain pairs only
             if target_domain != source_domain:
                 delta_scores = [r[target_domain]['delta'] for r in seed_results]
                 te_scores    = [r[target_domain]['te']    for r in seed_results]
@@ -335,14 +303,9 @@ def main():
                     f'summary/std_te_{source_domain}_to_{target_domain}':     std_te,
                 })
 
-        wandb.finish()  # close summary run before moving to next source domain
+        wandb.finish()
         print(f"\n Completed all seeds for source domain: {source_domain}")
-
-
-
 
 
 if __name__ == '__main__':
     main()
-
-

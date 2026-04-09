@@ -1,4 +1,3 @@
-
 #DESC: This file contains the training and evaluation loop for the IRM function over the RoBERTa model.
 
 import os
@@ -37,7 +36,6 @@ import os
 
 DOMAINS    = ['imdb', 'amazon', 'hotel', 'sentiment']
 DATA_ROOT  = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
-CKPT_DIR   = os.path.join(os.path.dirname(__file__), '..', '..', 'checkpoints')
 BATCH_SIZE = 32
 MAX_LENGTH = 256
 EPOCHS     = 10
@@ -189,11 +187,9 @@ def train(domain,seed,tokenizer):
     scheduler = get_linear_schedule_with_warmup(optimizer,num_warmup_steps=warmup_steps,num_training_steps=total_steps)
     criterion = torch.nn.CrossEntropyLoss()
 
-    run_ckpt_dir = os.path.join(CKPT_DIR, f'irm_{domain}_seed{seed}')
-    os.makedirs(run_ckpt_dir, exist_ok=True)
-
     # early stopping setup
     best_val_f1    = 0.0
+    best_state     = None
     patience       = 3
     patience_count = 0
 
@@ -255,11 +251,8 @@ def train(domain,seed,tokenizer):
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             patience_count  = 0
-            torch.save(
-                model.state_dict(),
-                os.path.join(run_ckpt_dir,'best_model.pt')
-            )
-            print(f'New best model saved at: val_f1 of {best_val_f1}')
+            # Save best weights in memory — no disk I/O
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         else:
             patience_count += 1
             print(f"No improvement {patience_count / patience}")
@@ -271,17 +264,19 @@ def train(domain,seed,tokenizer):
 
 
     wandb.finish()
-    # model.load_state_dict(
-    #     torch.load(os.path.join(run_ckpt_dir,'best_model.pt'))
-    # )
-    return os.path.join(run_ckpt_dir, 'best_model.pt')
+
+    # Restore best weights before returning
+    if best_state is not None:
+        model.load_state_dict(best_state)
+        model.to(DEVICE)
+
+    return model
 
         
 
 
 
 def main():
-    os.makedirs(CKPT_DIR,exist_ok=True)
     wandb.login(key=os.environ.get('WANDB_API_KEY'))
 
 
@@ -295,12 +290,9 @@ def main():
         for seed in SEEDS:
             print(f'SEED: {seed}')
 
-            ckpt_path = train(domain=target,seed=seed,tokenizer=tokenizer)
-            model = RobertaClassifier(num_labels=2).to(DEVICE)
+            # train() now returns the model directly — no checkpoint on disk
+            model = train(domain=target,seed=seed,tokenizer=tokenizer)
 
-            model.load_state_dict(
-                torch.load(ckpt_path,map_location=DEVICE)
-            )
             #DESC: The below code is to log the results onto weights and biases 
             wandb.init(
                 project = 'AGM-NLP-Research',
@@ -316,6 +308,9 @@ def main():
             seed_results.append(results)
             wandb.finish()
 
+            # Explicitly free GPU memory before next seed
+            del model
+            torch.cuda.empty_cache()
 
 
             #DESC: This is the logging for the summary after we have completed everything
@@ -368,7 +363,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-

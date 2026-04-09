@@ -1,4 +1,3 @@
-
 #TODO: Make sure to add the training loop to train the roberta model
 #! Make sure to write the loop same as that for models/bert/train.py
 import os
@@ -36,6 +35,14 @@ LR         = 2e-5
 WARMUP_RATIO = 0.1
 SEEDS      = [42, 43, 44, 45, 46, 47, 48, 49]
 DEVICE     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# ── Selective checkpoint config ──────────────────────────────────────
+# Only save a checkpoint for this specific (source_domain, seed) combo.
+# This one checkpoint is needed later for the qualitative token analysis
+# (before-AGM vs after-AGM attribution heatmaps on Sent140 examples).
+# Set to None to disable all checkpoint saving.
+SAVE_CHECKPOINT_FOR = ('imdb', 42)   # (source_domain, seed)
+# ─────────────────────────────────────────────────────────────────────
 
 def get_dataloader(domain, split, tokenizer, shuffle = False):
     path = os.path.join(DATA_ROOT,domain,split)
@@ -77,7 +84,7 @@ def evaluate(model,dataloader):
 
 
 
-def train(source_domain,seed,tokenizer):
+def train(source_domain, seed, tokenizer, save_checkpoint=False):
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -114,11 +121,15 @@ def train(source_domain,seed,tokenizer):
     criterion = torch.nn.CrossEntropyLoss()
 
 
+    # Checkpoint dir — only created if save_checkpoint is True
     run_ckpt_dir = os.path.join(CKPT_DIR, f'roberta_{source_domain}_seed{seed}')
-    os.makedirs(run_ckpt_dir, exist_ok=True)
+    if save_checkpoint:
+        os.makedirs(run_ckpt_dir, exist_ok=True)
+        print(f"[CHECKPOINT] Will save best model to {run_ckpt_dir}")
 
     # early stopping setup
     best_val_f1    = 0.0
+    best_state     = None
     patience       = 3
     patience_count = 0
 
@@ -168,11 +179,16 @@ def train(source_domain,seed,tokenizer):
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             patience_count  = 0
-            torch.save(
-                model.state_dict(),
-                os.path.join(run_ckpt_dir,'best_model.pt')
-            )
-            print(f'New best model saved at: val_f1 of {best_val_f1}')
+            # Save best weights in memory — no disk I/O
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+
+            # If this is the run we want to keep, also save to disk
+            if save_checkpoint:
+                torch.save(
+                    model.state_dict(),
+                    os.path.join(run_ckpt_dir,'best_model.pt')
+                )
+                print(f'[CHECKPOINT] New best model saved at: val_f1 of {best_val_f1}')
         else:
             patience_count += 1
             print(f"No improvement {patience_count / patience}")
@@ -184,10 +200,13 @@ def train(source_domain,seed,tokenizer):
 
 
     wandb.finish()
-    # model.load_state_dict(
-    #     torch.load(os.path.join(run_ckpt_dir,'best_model.pt'))
-    # )
-    return os.path.join(run_ckpt_dir, 'best_model.pt')
+
+    # Restore best weights before returning
+    if best_state is not None:
+        model.load_state_dict(best_state)
+        model.to(DEVICE)
+
+    return model
 
 
 def evaluate_cross_domain(model, source_domain, tokenizer, seed):
@@ -244,7 +263,7 @@ def evaluate_cross_domain(model, source_domain, tokenizer, seed):
 
 
 def main():
-    os.makedirs(CKPT_DIR,exist_ok=True)
+    os.makedirs(CKPT_DIR, exist_ok=True)
     wandb.login(key=os.environ.get('WANDB_API_KEY'))
 
 
@@ -258,12 +277,20 @@ def main():
         for seed in SEEDS:
             print(f'SEED: {seed}')
 
-            ckpt_path = train(source_domain=source_domain,seed=seed, tokenizer = tokenizer)
-            model = RobertaClassifier(num_labels=2).to(DEVICE)
-
-            model.load_state_dict(
-                torch.load(ckpt_path,map_location=DEVICE)
+            # Only save checkpoint for the specific combo we need for qualitative analysis
+            should_save = (
+                SAVE_CHECKPOINT_FOR is not None
+                and source_domain == SAVE_CHECKPOINT_FOR[0]
+                and seed == SAVE_CHECKPOINT_FOR[1]
             )
+
+            model = train(
+                source_domain=source_domain,
+                seed=seed,
+                tokenizer=tokenizer,
+                save_checkpoint=should_save
+            )
+
             #DESC: The below code is to log the results onto weights and biases 
             wandb.init(
                 project = 'AGM-NLP-Research',
@@ -278,6 +305,10 @@ def main():
             results = evaluate_cross_domain(model,source_domain,tokenizer,seed)
             seed_results.append(results)
             wandb.finish()
+
+            # Explicitly free GPU memory before next seed
+            del model
+            torch.cuda.empty_cache()
 
 
             
