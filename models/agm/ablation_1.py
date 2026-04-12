@@ -31,7 +31,7 @@ MAX_LENGTH   = 256
 EPOCHS       = 10
 LR           = 2e-5
 WARMUP_RATIO = 0.1
-SEEDS        = [42, 43, 44]
+SEEDS        = [42, 43, 44, 45, 46, 47, 48, 49]
 DEVICE       = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 LAMBDA1      = 0.1   # weight for L_mask
 

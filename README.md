@@ -3,7 +3,7 @@
 **Shubham Harkare · Yash Kulkarni · Arvind Suresh Yogesh Babu**  
 University of Michigan — SI 630 NLP Project
 
-> Target venue: EMNLP 2025 Findings / BlackboxNLP 2025 Workshop
+> Target venue: BlackboxNLP 2026 / EMNLP 2026 (via ARR)
 
 ---
 
@@ -13,9 +13,10 @@ Transformer models such as BERT and RoBERTa achieve strong in-domain performance
 
 This repository implements a complete research pipeline:
 
-1. **Baseline Study** — BERT, RoBERTa, DANN, and IRM across all domain-transfer pairs
-2. **Diagnostic Study** — Attribution Drift Score (ADS) as a cross-domain diagnostic framework
-3. **Attribution-Guided Masking (AGM)** — A novel training objective combining gradient-based spuriousness detection with counterfactual contrastive learning
+1. **Baseline Study** — BERT, RoBERTa, DANN, IRM, Group DRO, and Fish across all domain-transfer pairs
+2. **Diagnostic Study** — Attribution Drift Score (ADS) as a cross-domain diagnostic (negative result)
+3. **Attribution-Guided Masking (AGM)** — A training-time intervention using gradient-based attribution to detect and penalize spurious token reliance
+4. **Ablation Study** — Isolating the contribution of attribution masking vs. contrastive loss
 
 ---
 
@@ -52,15 +53,26 @@ This repository implements a complete research pipeline:
 │   ├── irm/
 │   │   ├── penalty.py          # compute_irm_penalty
 │   │   └── train.py
+│   ├── dro/
+│   │   └── train.py            # Group DRO (Sagawa et al., 2020)
+│   ├── fish/
+│   │   └── train.py            # Fish gradient matching (Shi et al., 2022)
 │   ├── agm/
 │   │   ├── model.py            # AGMModel
 │   │   ├── agm_functions.py    # Helper functions
-│   │   └── train.py            # AGM training loop
+│   │   └── train.py            # AGM training loop (Full objective)
+│   ├── ablation/
+│   │   ├── mask_only.py        # L_CE + λ1·L_mask (no L_CCL)
+│   │   ├── no_mask.py          # L_CE + λ2·L_CCL (random token selection)
+│   │   └── random_mask.py      # Full objective with random tokens
 │   └── ads/
 │       ├── compute_mean_ig.py
 │       └── ads_pipeline.py
 │
-├── checkpoints/
+├── analysis/
+│   └── qualitative_tokens.py   # Token attribution heatmaps (planned)
+│
+├── checkpoints/                # Selective saves only — see notes
 ├── results/
 ├── requirements.txt
 └── README.md
@@ -90,38 +102,53 @@ This repository implements a complete research pipeline:
 
 ## Results
 
-### Generalization Gap (Δ) — All Models
-Lower is better. Δ = |F1_source - F1_target|
+### Generalization Gap (Δ) — Baselines (8 seeds)
+Lower is better. Δ = |F1_source − F1_target|. All values mean ± std over 8 seeds.
 
-| Target | BERT | RoBERTa | DANN | IRM | AGM |
-|--------|------|---------|------|-----|-----|
-| **IMDb** | 0.097 | 0.095 | 0.012 | 0.049 | **0.013** ✅ |
-| **Amazon** | 0.096 | 0.099 | 0.021 | 0.055 | **0.029** ✅ |
-| **Hotel** | 0.121 | 0.145 | 0.032 | 0.084 | **0.029** ✅ |
-| **Sentiment** | 0.237 | 0.275 | 0.269 | 0.224 | 🔄 Running |
+**BERT (single-source, averaged across sources):**
 
-### AGM Training Curves (IMDb fold — representative)
+| Target | Avg Δ |
+|--------|-------|
+| IMDb | 0.119 |
+| Amazon | 0.055 |
+| Hotel | 0.059 |
+| Sent140 | 0.240 |
 
-```
-Epoch   Loss    L_CE    L_mask  L_CCL   Val F1
-1       0.392   0.386   0.042   0.023   0.883
-2       0.299   0.293   0.040   0.015   0.901
-3       0.225   0.220   0.035   0.014   0.905
-8       0.022   0.021   0.005   0.005   0.914
-```
+**RoBERTa (single-source, averaged across sources):**
 
-L_mask dropped 87% and L_CCL dropped 79% across training — model genuinely learning to suppress spurious token reliance.
+| Target | Avg Δ |
+|--------|-------|
+| IMDb | 0.100 |
+| Amazon | 0.045 |
+| Hotel | 0.060 |
+| Sent140 | 0.271 |
 
----
+**DANN (leave-one-out, 8 seeds):**
 
-## Experimental Protocol
+| Target | Δ |
+|--------|------|
+| IMDb | 0.0179±0.0078 |
+| Amazon | 0.0246±0.0036 |
+| Hotel | 0.0211±0.0118 |
+| Sent140 | 0.2641±0.0359 |
 
-- **Task:** Binary sentiment classification (positive / negative)
-- **Transfer:** Strict zero-shot — no target domain data during training
-- **DANN/IRM/AGM:** Leave-one-out — train on 3 domains, evaluate on 4th
-- **Seeds:** [42, 43, 44] — results reported as mean±std
-- **Hardware:** University HPC (A100/V100)
-- **Tracking:** Weights & Biases project `AGM-NLP`
+**IRM, DRO, Fish** — 🔄 Running (8 seeds)
+
+### AGM Results (3 seeds — to be updated to 8 seeds)
+
+| Target | Full AGM | Mask-only | No Mask | Random |
+|--------|----------|-----------|---------|--------|
+| IMDb | .011±.005 | .015±.005 | .011±.003 | .010±.002 |
+| Amazon | .020±.004 | .020±.004 | .017±.002 | .018±.004 |
+| Hotel | .035±.010 | .016±.007 | .030±.011 | .035±.004 |
+| Sent140 | .237±.014 | **.232±.010** | .290±.066 | .260±.018 |
+
+### Key Findings (so far)
+
+1. **RoBERTa exploits spurious features more than BERT** — Higher in-domain F1 but worse Sent140 transfer (Δ=0.271 vs 0.240), confirmed with 8 seeds
+2. **DANN fails on Sent140** — Strong on structured domains (Δ<0.03) but Δ=0.264 on Twitter transfer
+3. **Mask-only AGM is the strongest configuration** — Δ=0.232 on Sent140 with tightest variance (±0.010)
+4. **Attribution-guided masking is the critical component** — Removing it (No Mask) degrades by ~6 Δ points; random tokens can't replicate it
 
 ---
 
@@ -137,20 +164,53 @@ L_CCL  = ||f(x) - f(x')||²
 
 Where x' is a counterfactual generated by replacing spurious tokens via RoBERTa MLM, filtered to preserve sentiment polarity.
 
+**Main method (Mask-only):** `L = L_CE + λ1·L_mask` (λ2 = 0)
+
 ---
 
 ## Hyperparameters
 
-| Parameter | BERT/RoBERTa | DANN | IRM | AGM |
-|-----------|-------------|------|-----|-----|
-| Batch size | 32 | 32 | 32 | 16 |
-| Max length | 256 | 256 | 256 | 256 |
-| LR | 2e-5 | 2e-5 | 2e-5 | 2e-5 |
-| Epochs | 10 | 10 | 10 | 10 |
-| λ (domain) | — | annealed 0→1 | — | — |
-| λ (IRM) | — | — | warmup=1.0, main=1e2 | — |
-| λ1 (mask) | — | — | — | 0.1 |
-| λ2 (CCL) | — | — | — | 0.1 |
+| Parameter | BERT/RoBERTa | DANN | IRM | DRO | Fish | AGM |
+|-----------|-------------|------|-----|-----|------|-----|
+| Batch size | 32 | 32 | 32 | 32 | 32 | 4 (×2 accum = 8 effective) |
+| Max length | 256 | 256 | 256 | 256 | 256 | 256 |
+| LR | 2e-5 | 2e-5 | 2e-5 | 2e-5 | 2e-5 (outer) | 2e-5 |
+| Epochs | 50 | 50 | 10 | 50 | 50 | 10 |
+| Weight decay | 0.01 | — | 0.01 | 0.01 | 0.01 | 0.01 |
+| λ (domain) | — | annealed 0→1 | — | — | — | — |
+| λ (IRM) | — | — | warmup=1.0, main=1e2 | — | — | — |
+| η (DRO) | — | — | — | 0.01 | — | — |
+| C (DRO adj) | — | — | — | 1.5 | — | — |
+| Inner LR (Fish) | — | — | — | — | 1e-4 | — |
+| λ1 (mask) | — | — | — | — | — | 0.1 |
+| λ2 (CCL) | — | — | — | — | — | 0.1 |
+| τ_high | — | — | — | — | — | 0.75 |
+
+---
+
+## Experimental Protocol
+
+- **Task:** Binary sentiment classification (positive / negative)
+- **Transfer:** Strict zero-shot — no target domain data during training
+- **DANN/IRM/DRO/Fish/AGM:** Leave-one-out — train on 3 domains, evaluate on 4th
+- **BERT/RoBERTa:** Single-source — train on 1 domain, evaluate on all 4
+- **Seeds:** [42, 43, 44, 45, 46, 47, 48, 49] — 8 seeds, reported as mean ± std
+- **Statistical tests:** Bootstrap CIs and Wilcoxon signed-rank tests for key comparisons
+- **Hardware:** University of Michigan Great Lakes HPC (A100 / V100 / RTX 6000)
+- **Tracking:** Weights & Biases project `AGM-NLP-Research`
+
+---
+
+## Checkpoint Strategy
+
+To conserve storage on Great Lakes HPC, we use selective checkpoint saving:
+
+- **BERT, DANN, IRM, DRO, Fish:** No checkpoints saved — best model weights kept in memory during training, metrics logged to wandb
+- **RoBERTa:** One checkpoint saved (`imdb`, seed 42) for qualitative token analysis
+- **Mask-only AGM:** One checkpoint saved (`sentiment` target fold, seed 42) for qualitative token analysis
+- **Full AGM, No Mask, Random Mask:** No checkpoints saved
+
+This saves ~60GB of storage compared to saving all checkpoints.
 
 ---
 
@@ -172,11 +232,21 @@ python data/raw_data/sentiment.py
 ## Training
 
 ```bash
+# Baselines
 python models/bert/train.py
 python models/roberta/train.py
 python models/dann/train.py
 python models/irm/train.py
+python models/dro/train.py
+python models/fish/train.py
+
+# AGM + Ablations
 python models/agm/train.py
+python models/ablation/mask_only.py
+python models/ablation/no_mask.py
+python models/ablation/random_mask.py
+
+# Diagnostics
 python models/ads/ads_pipeline.py
 ```
 
@@ -187,18 +257,38 @@ python models/ads/ads_pipeline.py
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Data Setup | ✅ Complete |
-| 2 | Baselines (BERT, RoBERTa, DANN, IRM) | ✅ Complete |
-| 3 | ADS Diagnostic Study | ✅ Complete (negative result) |
-| 4 | AGM Implementation | 🔄 In Progress (3/4 folds) |
-| 5 | Ablations | ⏳ Pending |
-| 6 | Paper Writing & Submission | 🔄 In Progress |
+| 2 | Baselines — BERT, RoBERTa (8 seeds) | ✅ Complete |
+| 3 | Baselines — DANN (8 seeds) | ✅ Complete |
+| 4 | Baselines — IRM (8 seeds) | 🔄 Running |
+| 5 | Baselines — DRO (8 seeds) | 🔄 Running |
+| 6 | Baselines — Fish (8 seeds) | 🔄 Running |
+| 7 | ADS Diagnostic Study | ✅ Complete (negative result) |
+| 8 | AGM + Ablations (8 seeds) | ⏳ Pending |
+| 9 | Qualitative Token Analysis | ⏳ Pending |
+| 10 | Statistical Tests (bootstrap CIs, Wilcoxon) | ⏳ Pending |
+| 11 | Paper Rewrite — Mask-only as main method | ⏳ Pending |
+| 12 | Submission to BlackboxNLP 2026 / ARR | ⏳ Target: Aug 2026 |
 
 ---
 
 ## Notes for Teammates
 
 - **Do not push checkpoints** — large files, gitignored
-- **Always run 3 seeds** — single-seed results not accepted
-- **AGM batch size is 16** — not 32, due to double backward memory requirement
+- **Always run 8 seeds** — [42, 43, 44, 45, 46, 47, 48, 49]
+- **AGM batch size is 4 (effective 8)** — due to double backward memory requirement
 - **IRM lambda must be 1e2** — 1e4 causes model collapse
+- **DRO needs worst-case early stopping** — use min(val_f1) across domains, not average
+- **Fish uses Reptile-style inner/outer loop** — not simple gradient averaging
+- **Baselines save no checkpoints** — metrics only, best weights in memory
 - **Log everything to W&B from run 1**
+
+---
+
+## References
+
+- Sagawa et al. (2020). *Distributionally Robust Neural Networks for Group Shifts.* ICLR.
+- Shi et al. (2022). *Gradient Matching for Domain Generalization.* ICLR.
+- Ganin et al. (2016). *Domain-Adversarial Training of Neural Networks.* JMLR.
+- Arjovsky et al. (2019). *Invariant Risk Minimization.* arXiv.
+- Sundararajan et al. (2017). *Axiomatic Attribution for Deep Networks.* ICML.
+- Ross et al. (2017). *Right for the Right Reasons.* IJCAI.
