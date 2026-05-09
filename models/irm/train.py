@@ -11,23 +11,16 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from dotenv import load_dotenv
 from sklearn.metrics import f1_score,accuracy_score
 
-# from models.roberta.roberta_model. import RobertaClassifier
-# from models.roberta.roberta_model import RobertaClassifier
 from models.roberta.roberta_model import RobertaClassifier
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from models.irm.penalty import compute_irm_penalty #! Important for calculating the IRM penalty
 
-
-
 from models.dataset import SentimentDataset
 
 import numpy as np
 
-# from trconfig import DOMAINS, DATA_ROOT, BATCH_SIZE, MAX_LENGTH, DEVICE
 load_dotenv()
-
-
 
 
 import torch
@@ -64,7 +57,6 @@ def get_dataloader(target_domain,split,tokenizer,shuffle = False):
 def get_target_dataloader(domain, split, tokenizer, shuffle=False):
     path = os.path.join(DATA_ROOT, domain, split)
     dataset = SentimentDataset(path, tokenizer, max_length=MAX_LENGTH)
-    # Note: no domain ID needed — evaluate() only uses sentiment labels
     return DataLoader(
         dataset,
         batch_size=BATCH_SIZE,
@@ -103,7 +95,6 @@ def evaluate_cross_domain(model, target_domain, tokenizer, seed):
     model.eval()
 
     # Step 1: evaluate on combined training domains test set
-    # get_dataloader returns list of 3 DataLoaders — iterate over all 3
     train_test_loaders = get_dataloader(target_domain, 'test', tokenizer, shuffle=False)
     
     all_preds  = []
@@ -176,7 +167,11 @@ def train(domain,seed,tokenizer):
     )
 
     train_loader = get_dataloader(domain,'train',tokenizer,shuffle=True)
-    val_dataloader = get_target_dataloader(domain, 'val', tokenizer, shuffle=False)
+
+    # FIX: use source-domain val (excludes target) instead of target val.
+    # Previously this was get_target_dataloader, which caused target leakage
+    # via early stopping. Returns a list of 3 loaders, one per source domain.
+    val_loaders = get_dataloader(domain, 'val', tokenizer, shuffle=False)
 
     model = RobertaClassifier(num_labels=2).to(DEVICE)
 
@@ -230,7 +225,13 @@ def train(domain,seed,tokenizer):
             train_loss += total_loss.item()
 
         avg_train_loss = train_loss / len(train_loader[0])
-        val_f1, val_acc = evaluate(model,val_dataloader)
+
+        # FIX: evaluate across all 3 source val loaders and take the mean.
+        # Previously this was a single evaluate() call on target val.
+        val_f1s  = [evaluate(model, loader)[0] for loader in val_loaders]
+        val_accs = [evaluate(model, loader)[1] for loader in val_loaders]
+        val_f1   = float(np.mean(val_f1s))
+        val_acc  = float(np.mean(val_accs))
 
 
         print(f"Epoch {epoch+1}/{EPOCHS} | "
@@ -251,7 +252,6 @@ def train(domain,seed,tokenizer):
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             patience_count  = 0
-            # Save best weights in memory — no disk I/O
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         else:
             patience_count += 1
@@ -265,7 +265,6 @@ def train(domain,seed,tokenizer):
 
     wandb.finish()
 
-    # Restore best weights before returning
     if best_state is not None:
         model.load_state_dict(best_state)
         model.to(DEVICE)
@@ -286,14 +285,11 @@ def main():
         print(f'Training on source domain: {target}')
 
         seed_results = []
-        #DESC: Making sure that we are not lucky because of the seed, hence we are repeating our experiment so that we can have a error margin
         for seed in SEEDS:
             print(f'SEED: {seed}')
 
-            # train() now returns the model directly — no checkpoint on disk
             model = train(domain=target,seed=seed,tokenizer=tokenizer)
 
-            #DESC: The below code is to log the results onto weights and biases 
             wandb.init(
                 project = 'AGM-NLP-Research',
                 name=f'irm_{target}_seed{seed}_eval',
@@ -308,12 +304,10 @@ def main():
             seed_results.append(results)
             wandb.finish()
 
-            # Explicitly free GPU memory before next seed
             del model
             torch.cuda.empty_cache()
 
 
-            #DESC: This is the logging for the summary after we have completed everything
         wandb.init(
             project='AGM-NLP-Research',
             name= f'irm_{target}_summary',
@@ -354,7 +348,7 @@ def main():
             f'summary/std_te_{target}':         std_te,
         })
 
-        wandb.finish()  # close summary run before moving to next source domain
+        wandb.finish()
         print(f"\n Completed all seeds for source domain: {target}")
 
 
